@@ -13,22 +13,7 @@ const Gallery = () => {
     { src: "/gallery/8.avif", alt: "Gallery Image 8" }
   ];
   const [current, setCurrent] = useState(0);
-  const [showVideo, setShowVideo] = useState(false);
-  const videoContainerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!videoContainerRef.current) return;
-    const observer = new window.IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          setShowVideo(entry.intersectionRatio === 1);
-        });
-      },
-      { threshold: [0, 1] }
-    );
-    observer.observe(videoContainerRef.current);
-    return () => observer.disconnect();
-  }, []);
+  // Video is coming soon, so we do not show or play the video
 
   const handleChange = (nextIdx: number) => {
     setCurrent(nextIdx);
@@ -46,31 +31,19 @@ const Gallery = () => {
         </p>
         {/* Pre-Wedding Video as background/first item */}
         <div
-          ref={videoContainerRef}
-          className="w-full max-w-5xl aspect-video rounded-3xl overflow-hidden shadow-2xl border-4 border-pink-200 mb-12 relative flex items-center justify-center"
+          className="w-full max-w-5xl aspect-video rounded-3xl overflow-hidden shadow-2xl border-4 border-pink-200 mb-12 relative flex items-center justify-center bg-gray-200"
           style={{ minHeight: 400 }}
         >
-          {!showVideo && (
-            <img
-              src="/gallery/sc1.webp"
-              alt="Gallery Poster"
-              className="absolute inset-0 w-full h-full object-cover z-10 bg-white"
-              style={{ pointerEvents: 'none' }}
-            />
-          )}
-          {showVideo && (
-            <iframe
-              width="100%"
-              height="100%"
-              src="https://www.youtube.com/embed/_9EOY9Pf40g?si=H07-z1kQCJE3ciF-&autoplay=1&mute=1&rel=0"
-              title="YouTube video player"
-              frameBorder="0"
-              allow="autoplay; accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-              className="w-full h-full object-contain relative z-0 bg-black"
-              style={{ minHeight: 400, aspectRatio: '16/9', display: 'block' }}
-            ></iframe>
-          )}
+          <img
+            src="/gallery/sc1.webp"
+            alt="Gallery Poster"
+            className="absolute inset-0 w-full h-full object-cover z-0 bg-white opacity-60"
+            style={{ pointerEvents: 'none' }}
+          />
+          <div className="relative z-10 flex flex-col items-center justify-center w-full h-full">
+            <span className="text-4xl md:text-5xl font-bold text-rose-600 drop-shadow-lg mb-4">Coming Soon</span>
+            <span className="text-lg md:text-2xl text-gray-700 font-semibold">Pre-Wedding Video</span>
+          </div>
         </div>
         <div className="relative w-full flex flex-col items-center">
           <div className="relative w-full flex items-center justify-center mb-8 overflow-hidden" style={{minHeight: 320}}>

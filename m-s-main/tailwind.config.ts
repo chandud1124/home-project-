@@ -5,6 +5,14 @@ export default {
 	content: [
 		"./pages/**/*.{ts,tsx}",
 		"./components/**/*.{ts,tsx}",
+// Converted to CommonJS for compatibility
+const tailwindcssAnimate = require("tailwindcss-animate");
+
+module.exports = {
+	darkMode: ["class"],
+	content: [
+		"./pages/**/*.{ts,tsx}",
+		"./components/**/*.{ts,tsx}",
 		"./app/**/*.{ts,tsx}",
 		"./src/**/*.{ts,tsx}",
 	],
@@ -113,5 +121,5 @@ export default {
 			}
 		}
 	},
-	plugins: [require("tailwindcss-animate")],
-} satisfies Config;
+	plugins: [tailwindcssAnimate],
+};

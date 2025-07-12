@@ -3,7 +3,6 @@ import { Calendar, Clock, ExternalLink } from 'lucide-react';
 import { gtagEvent, getDeviceInfo } from '../lib/gtag';
 
 const EventDetails = () => {
-  // @ts-ignore: gtag is injected by Google Analytics
   const handleDirectionsClick = () => {
     const device = getDeviceInfo();
     gtagEvent({

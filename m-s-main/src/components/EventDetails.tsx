@@ -121,7 +121,7 @@ const EventDetails = () => {
           >
             <div className="text-center mb-8">
               <div className="w-20 h-20 bg-gradient-to-br from-red-100 to-rose-200 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform duration-300">
-                <Clock className="text-red-200" size={36} />
+                <Clock className="text-rose-700" size={36} />
               </div>
               <h3 className="font-serif text-3xl font-bold text-white drop-shadow-lg mb-4">
                 Evening of Elegance
@@ -136,7 +136,7 @@ const EventDetails = () => {
               </div>
               <div className="flex items-center justify-center group-hover:translate-x-2 transition-transform duration-300">
                 <Clock className="text-red-200 mr-2" size={24} />
-                <span className="text-white font-semibold text-lg drop-shadow-md">6:30 PM onwards</span>
+                <span className="text-white font-semibold text-lg drop-shadow-md">7:00 PM onwards</span>
               </div>
             </div>
           </div>
@@ -164,11 +164,11 @@ const EventDetails = () => {
             style={{filter: 'blur(2px)'}}
           />
           <div className="relative z-10 text-center mb-10 pb-4 flex flex-col items-center justify-center w-full">
-            <h3 className="font-serif text-5xl md:text-6xl font-bold text-white drop-shadow-lg mb-8 hover:scale-105 transition-transform duration-300 break-words whitespace-pre-line w-full max-w-full overflow-visible leading-snug min-h-[4.5rem] md:min-h-[6rem] flex items-center justify-center animate-fade-in-center">
+            <h3 className="font-serif text-5xl md:text-6xl font-bold text-white drop-shadow-lg mb-8 hover:scale-105 transition-transform duration-300 break-words whitespace-pre-line w-full max-w-full overflow-visible leading-snug min-h-[4.5rem] md:min-h-[6rem] flex items-center justify-center animate-fade-in-up">
               The Setting of Our Story
             </h3>
-            <div className="w-24 h-1 bg-gradient-to-r from-rose-500 to-red-500 mx-auto mb-8"></div>
-            <div className="max-w-5xl mx-auto space-y-6 text-white leading-relaxed animate-fade-in-center">
+            <div className="w-24 h-1 bg-gradient-to-r from-rose-500 to-red-500 mx-auto mb-8 animate-fade-in-up" style={{animationDelay: '0.2s', animationFillMode: 'both'}}></div>
+            <div className="max-w-5xl mx-auto space-y-6 text-white leading-relaxed animate-fade-in-up" style={{animationDelay: '0.4s', animationFillMode: 'both'}}>
               <p className="text-xl font-semibold">
                 "A place where culture and grace come together to write love’s most beautiful chapter"
               </p>
@@ -176,7 +176,7 @@ const EventDetails = () => {
                 Experience the perfect blend of tradition and luxury at our chosen venue, where every detail reflects the beauty of our union
               </p>
             </div>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center mt-8">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center mt-8 animate-fade-in-up" style={{animationDelay: '0.6s', animationFillMode: 'both'}}>
               <button 
                 onClick={handleDirectionsClick}
                 className="group inline-flex items-center px-8 py-4 bg-gradient-to-r from-rose-600 to-pink-600 text-white font-semibold rounded-full shadow-lg hover:shadow-xl transform transition-all duration-300 hover:scale-105 hover:from-rose-700 hover:to-pink-700"
@@ -188,6 +188,15 @@ const EventDetails = () => {
           </div>
         </div>
       </div>
+      <style>{`
+        @keyframes fade-in-up {
+          0% { opacity: 0; transform: translateY(40px) scale(0.98); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .animate-fade-in-up {
+          animation: fade-in-up 1s cubic-bezier(0.23, 1, 0.32, 1) both;
+        }
+      `}</style>
     </section>
   );
 };

@@ -1,0 +1,201 @@
+
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
+const http = require('http');
+const socketIo = require('socket.io');
+
+// Import routes
+const authRoutes = require('./routes/auth');
+const deviceRoutes = require('./routes/devices');
+const scheduleRoutes = require('./routes/schedules');
+const userRoutes = require('./routes/users');
+const activityRoutes = require('./routes/activities');
+const securityRoutes = require('./routes/security');
+
+// Import services
+const scheduleService = require('./services/scheduleService');
+
+// Import Google Calendar routes
+const googleCalendarRoutes = require('./routes/googleCalendar');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: process.env.NODE_ENV === 'production'
+      ? [process.env.FRONTEND_URL || 'https://your-frontend-domain.com']
+      : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'],
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
+
+// Security middleware
+app.use(helmet());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? [process.env.FRONTEND_URL || 'https://your-frontend-domain.com']
+    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  message: 'Too many requests from this IP, please try again later.'
+});
+app.use('/api/', limiter);
+
+// Parse JSON bodies
+app.use(express.json());
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/dwell-control')
+  .then(() => console.log('Connected to MongoDB'))
+  .catch((err) => console.error('MongoDB connection error:', err));
+
+// Mount routes
+// Mount routes
+app.use('/api/auth', authRoutes);
+app.use('/api/devices', deviceRoutes);
+app.use('/api/schedules', scheduleRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/activities', activityRoutes);
+app.use('/api/security', securityRoutes);
+app.use('/api/calendar', googleCalendarRoutes);
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Logging
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+}
+
+// Database connection
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => {
+  console.log('Connected to MongoDB');
+  createAdminUser();
+})
+.catch((err) => {
+  console.error('Database connection error:', err);
+  process.exit(1);
+});
+
+// Create default admin user
+const createAdminUser = async () => {
+  try {
+    const User = require('./models/User');
+    const existingAdmin = await User.findOne({ role: 'admin' });
+    
+    if (!existingAdmin) {
+      await User.create({
+        name: process.env.ADMIN_NAME || 'System Administrator',
+        email: process.env.ADMIN_EMAIL || 'admin@college.edu',
+        password: process.env.ADMIN_PASSWORD || 'admin123456',
+        role: 'admin',
+        department: 'IT Department',
+        accessLevel: 'full'
+      });
+      console.log('Default admin user created');
+    }
+  } catch (error) {
+    console.error('Error creating admin user:', error);
+  }
+};
+
+// Socket.IO for real-time updates
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+  
+  socket.on('join-room', (room) => {
+    socket.join(room);
+    console.log(`Socket ${socket.id} joined room ${room}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+
+// Make io accessible to routes
+app.set('io', io);
+
+// API routes
+app.use('/api/auth', authRoutes);
+app.use('/api/devices', deviceRoutes);
+app.use('/api/schedules', scheduleRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/activities', activityRoutes);
+app.use('/api/security', securityRoutes);
+app.use('/api/google-calendar', googleCalendarRoutes);
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV,
+    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
+  });
+});
+
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Route not found' });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({
+    message: 'Something went wrong!',
+    error: process.env.NODE_ENV === 'development' ? err.message : {}
+  });
+});
+
+const PORT = process.env.PORT || 3001;
+
+const startServer = (port) => {
+  try {
+    server.listen(port, () => {
+      console.log(`Server running on port ${port}`);
+      console.log(`Environment: ${process.env.NODE_ENV}`);
+    });
+  } catch (error) {
+    if (error.code === 'EADDRINUSE') {
+      console.log(`Port ${port} is busy, trying ${port + 1}...`);
+      startServer(port + 1);
+    } else {
+      console.error('Error starting server:', error);
+      process.exit(1);
+    }
+  }
+};
+
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.log(`Port ${PORT} is busy, trying ${PORT + 1}...`);
+    startServer(PORT + 1);
+  } else {
+    console.error('Server error:', error);
+  }
+});
+
+startServer(PORT);
+
+module.exports = { app, io };

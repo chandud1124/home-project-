@@ -26,7 +26,11 @@ const navigation = [
   { name: 'Settings', icon: Settings, href: '/settings', current: false },
 ];
 
-export const Sidebar = () => {
+interface SidebarProps {
+  className?: string;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ className }) => {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -39,7 +43,8 @@ export const Sidebar = () => {
   return (
     <div className={cn(
       "glass border-r flex flex-col transition-all duration-300",
-      collapsed ? "w-16" : "w-64"
+      collapsed ? "w-16" : "w-64",
+      className
     )}>
       {/* Logo/Brand */}
       <div className="p-4 border-b border-border/50">

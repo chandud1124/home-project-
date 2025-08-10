@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { DeviceCard } from '@/components/DeviceCard';
+import DeviceCard from '@/components/DeviceCard';
 import { StatsCard } from '@/components/StatsCard';
 import { MasterSwitchCard } from '@/components/MasterSwitchCard';
 import { DeviceConfigDialog } from '@/components/DeviceConfigDialog';
@@ -170,7 +170,6 @@ const Index = () => {
                   onToggleSwitch={handleToggleSwitch}
                   onUpdateDevice={handleUpdateDevice}
                   onDeleteDevice={handleDeleteDevice}
-                  onConfigureDevice={() => setConfigDevice(device.id)}
                 />
               ))}
             </div>
@@ -179,10 +178,10 @@ const Index = () => {
         {/* Device Configuration Dialog */}
       {configDevice && (
         <DeviceConfigDialog
-          device={devices.find(d => d.id === configDevice)!}
-          isOpen={!!configDevice}
-          onClose={() => setConfigDevice(null)}
-          onSave={(config) => {
+          initialData={devices.find(d => d.id === configDevice)!}
+          open={!!configDevice}
+          onOpenChange={(open) => !open && setConfigDevice(null)}
+          onSubmit={(config) => {
             handleUpdateDevice(configDevice, config);
             setConfigDevice(null);
           }}

@@ -1,31 +1,33 @@
 import React, { useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { B          {isMobile && (
+            <Button variant="ghost" size="icon" onClick={onMenuClick}>
+              <Menu className="h-6 w-6" />
+            </Button>
+          )} '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Bell, User, Wifi, WifiOff, Settings, LogOut, Home, Menu } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-// import { Sidebar } from './Sidebar';
-import { useIsMobile } from '@/hooks/use-mobile';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useDevices } from '@/hooks/useDevices';
 import { useSecurityNotifications } from '@/hooks/useSecurityNotifications';
-import { navItems } from '@/nav-items';
-import { Sidebar } from './Sidebar';
-export const Header = () => {
+import { useMobile } from '@/context/MobileContext';
+
+interface HeaderProps {
+  onMenuClick?: () => void;
+}
+
+export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
   const navigate = useNavigate();
-  const location = useLocation();
   const { devices } = useDevices();
   const { alerts: notifications } = useSecurityNotifications();
-  
-  const currentPage = navItems.find(item => item.to === location.pathname) || navItems[0];
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const isMobile = useIsMobile();
+  const { isMobile } = useMobile();
   
-    const connectedDevices = devices.filter(device => device.status === 'online').length;
-    const isConnected = connectedDevices > 0;
+  const connectedDevices = devices.filter(device => device.status === 'online').length;
+  const isConnected = connectedDevices > 0;
 
   // Only one dropdown open at a time
   const handleBellClick = () => {
@@ -64,17 +66,8 @@ export const Header = () => {
             </Sheet>
           )}
           <div>
-            <h1 className="text-2xl font-bold">{currentPage.title}</h1>
-            <p className="text-sm text-muted-foreground">
-              {location.pathname === '/' ? 'Monitor and control your IoT devices' :
-               location.pathname === '/devices' ? 'Manage your connected IoT devices' :
-               location.pathname === '/switches' ? 'Control individual switches' :
-               location.pathname === '/master' ? 'Master control for all switches' :
-               location.pathname === '/schedule' ? 'Automate your device schedules' :
-               location.pathname === '/users' ? 'Manage user access and permissions' :
-               location.pathname === '/settings' ? 'Configure system settings' :
-               'Monitor and control your IoT devices'}
-            </p>
+            <h1 className="text-2xl font-bold">Dashboard</h1>
+            <p className="text-sm text-muted-foreground">Monitor and control your IoT devices</p>
           </div>
         </div>
         <div className="flex items-center gap-4">

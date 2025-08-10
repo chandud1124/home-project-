@@ -93,10 +93,20 @@ const Register: React.FC = () => {
           name: form.name,
           email: form.email,
           password: form.password,
-          department: form.department
+          department: form.department,
+          role: 'user',
+          accessLevel: 'limited'
         }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        toast({
+          title: "Registration Failed",
+          description: data.message || "Registration failed. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
       
       if (res.ok) {
         toast({

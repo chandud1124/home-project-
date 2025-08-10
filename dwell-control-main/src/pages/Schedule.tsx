@@ -1,7 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Layout } from '@/components/Layout';
+import api from '@/services/api';
+
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -77,72 +78,108 @@ function ExcelImport({ onSchedulesExtracted }: { onSchedulesExtracted: (schedule
 
 const Schedule = () => {
   const { toast } = useToast();
-  const [schedules, setSchedules] = useState<Schedule[]>([
-    {
-      id: '1',
-      name: 'Morning Classroom Lights',
-      time: '07:00',
-      action: 'on',
-      days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-      switches: ['1-sw1', '2-sw3'],
-      enabled: true,
-      timeoutMinutes: 600 // 10 hours
-    },
-    {
-      id: '2',
-      name: 'Evening Shutdown',
-      time: '18:00',
-      action: 'off',
-      days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
-      switches: ['1-sw1', '1-sw2', '2-sw3'],
-      enabled: true,
-      timeoutMinutes: 0
-    }
-  ]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  
+  useEffect(() => {
+    const fetchSchedules = async () => {
+      try {
+        const response = await api.get('/api/schedules');
+        if (response.data.success) {
+          setSchedules(response.data.data);
+        } else {
+          toast({
+            title: "Error",
+            description: "Failed to fetch schedules",
+            variant: "destructive"
+          });
+        }
+      } catch (error) {
+        console.error('Schedule fetch error:', error);
+        toast({
+          title: "Error",
+          description: error.response?.data?.message || "Failed to fetch schedules",
+          variant: "destructive"
+        });
+      }
+    };
+
+    fetchSchedules();
+  }, [toast]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [importedSchedules, setImportedSchedules] = useState<any[]>([]);
   const [calendarConnected, setCalendarConnected] = useState(false);
 
-  const handleAddSchedule = (scheduleData: any) => {
-    const newSchedule: Schedule = {
-      id: Date.now().toString(),
-      enabled: true,
-      ...scheduleData
-    };
-    
-    setSchedules(prev => [...prev, newSchedule]);
-    toast({
-      title: "Schedule Added",
-      description: `${scheduleData.name} has been scheduled successfully`
-    });
+  const handleAddSchedule = async (scheduleData: any) => {
+    try {
+      const response = await api.post('/api/schedules', scheduleData);
+      if (response.data.success) {
+        const newSchedule = response.data.data;
+        setSchedules(prev => [...prev, newSchedule]);
+        toast({
+          title: "Schedule Added",
+          description: `${scheduleData.name} has been scheduled successfully`
+        });
+      }
+    } catch (error) {
+      console.error('Add schedule error:', error);
+      toast({
+        title: "Error",
+        description: error.response?.data?.message || "Failed to add schedule",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleEditSchedule = (scheduleData: any) => {
+  const handleEditSchedule = async (scheduleData: any) => {
     if (!editingSchedule) return;
     
-    setSchedules(prev => 
-      prev.map(schedule => 
-        schedule.id === editingSchedule.id 
-          ? { ...schedule, ...scheduleData }
-          : schedule
-      )
-    );
-    
-    setEditingSchedule(null);
-    toast({
-      title: "Schedule Updated",
-      description: `${scheduleData.name} has been updated successfully`
-    });
+    try {
+      const response = await api.put(`/api/schedules/${editingSchedule.id}`, scheduleData);
+      if (response.data.success) {
+        const updatedSchedule = response.data.data;
+        setSchedules(prev => 
+          prev.map(schedule => 
+            schedule.id === editingSchedule.id 
+              ? updatedSchedule
+              : schedule
+          )
+        );
+        setEditingSchedule(null);
+        toast({
+          title: "Schedule Updated",
+          description: `${scheduleData.name} has been updated successfully`
+        });
+      }
+    } catch (error) {
+      console.error('Edit schedule error:', error);
+      toast({
+        title: "Error",
+        description: error.response?.data?.message || "Failed to update schedule",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleDeleteSchedule = (scheduleId: string) => {
-    setSchedules(prev => prev.filter(s => s.id !== scheduleId));
-    toast({
-      title: "Schedule Deleted",
-      description: "Schedule has been removed successfully"
-    });
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    try {
+      const response = await api.delete(`/api/schedules/${scheduleId}`);
+      if (response.data.success) {
+        setSchedules(prev => prev.filter(s => s.id !== scheduleId));
+        toast({
+          title: "Schedule Deleted",
+          description: "Schedule has been removed successfully"
+        });
+      }
+    } catch (error) {
+      console.error('Delete schedule error:', error);
+      toast({
+        title: "Error",
+        description: error.response?.data?.message || "Failed to delete schedule",
+        variant: "destructive"
+      });
+    }
   };
 
   const toggleSchedule = (scheduleId: string) => {
@@ -156,7 +193,6 @@ const Schedule = () => {
   };
 
   return (
-    <Layout>
       <div className="space-y-6">
         {/* Google Calendar Integration */}
         <GoogleCalendarConnect onConnect={() => setCalendarConnected(true)} />
@@ -322,7 +358,6 @@ const Schedule = () => {
           schedule={editingSchedule}
         />
       </div>
-    </Layout>
   );
 };
 

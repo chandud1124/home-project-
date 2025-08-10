@@ -6,10 +6,8 @@ import {
   Cpu, 
   Wifi, 
   WifiOff, 
-  MoreVertical, 
   Settings, 
-  Trash2,
-  Calendar
+  Trash2
 } from 'lucide-react';
 import { SwitchControl } from './SwitchControl';
 import { DeviceConfigDialog } from './DeviceConfigDialog';
@@ -18,192 +16,105 @@ import { Device } from '@/types';
 interface DeviceCardProps {
   device: Device;
   onToggleSwitch: (deviceId: string, switchId: string) => void;
-  onUpdateDevice: (deviceId: string, updates: any) => void;
-  onDeleteDevice: (deviceId: string) => void;
-  onConfigureDevice?: () => void;
+  onUpdateDevice?: (deviceId: string, data: Partial<Device>) => void;
+  onDeleteDevice?: (deviceId: string) => void;
 }
 
-export const DeviceCard: React.FC<DeviceCardProps> = ({ 
-  device, 
-  onToggleSwitch, 
-  onUpdateDevice, 
-  onDeleteDevice,
-  onConfigureDevice
-}) => {
-  const [showActions, setShowActions] = useState(false);
-  const [showConfig, setShowConfig] = useState(false);
+export default function DeviceCard({ device, onToggleSwitch, onUpdateDevice, onDeleteDevice }: DeviceCardProps) {
+  const [showConfigDialog, setShowConfigDialog] = useState(false);
 
-  const handleConfigure = () => {
-    console.log(`Configure device: ${device.name}`);
-    if (onConfigureDevice) {
-      onConfigureDevice();
-    } else {
-      setShowConfig(true);
+  const handleSubmit = (data: any) => {
+    if (onUpdateDevice) {
+      onUpdateDevice(device.id, data);
     }
-    setShowActions(false);
-  };
-
-  const handleSchedule = () => {
-    console.log(`Schedule device: ${device.name}`);
-    setShowActions(false);
-    // TODO: Open scheduling dialog
-  };
-
-  const handleDelete = () => {
-    console.log(`Delete device: ${device.name}`);
-    if (window.confirm(`Are you sure you want to delete ${device.name}?`)) {
-      onDeleteDevice(device.id);
-    }
-    setShowActions(false);
-  };
-
-  const handleConfigSave = (deviceId: string, config: any) => {
-    console.log(`Saving config for device ${deviceId}:`, config);
-    onUpdateDevice(deviceId, config);
+    setShowConfigDialog(false);
   };
 
   return (
-    <>
-      <Card className="glass hover:shadow-lg transition-all duration-300 group">
-        <CardHeader className="pb-3">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-lg ${
-                device.status === 'online' 
-                  ? 'bg-success/20 text-success animate-pulse-online' 
-                  : 'bg-muted text-muted-foreground'
-              }`}>
-                <Cpu className="w-5 h-5" />
-              </div>
-              <div>
-                <CardTitle className="text-lg">{device.name}</CardTitle>
-                <div className="flex items-center gap-2 mt-1">
-                  <Badge 
-                    variant="secondary" 
-                    className={device.status === 'online' ? 'status-online' : 'status-offline'}
-                  >
-                    {device.status}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
-                    {device.ip}
-                  </span>
-                </div>
-              </div>
-            </div>
-            
-            <div className="relative">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowActions(!showActions)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <MoreVertical className="w-4 h-4" />
-              </Button>
-              {showActions && (
-                <div className="absolute right-0 top-8 glass rounded-md shadow-lg p-1 z-10 min-w-[120px]">
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="w-full justify-start gap-2"
-                    onClick={handleConfigure}
-                  >
-                    <Settings className="w-4 h-4" />
-                    Configure
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="w-full justify-start gap-2"
-                    onClick={handleSchedule}
-                  >
-                    <Calendar className="w-4 h-4" />
-                    Schedule
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="w-full justify-start gap-2 text-danger hover:text-danger"
-                    onClick={handleDelete}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Delete
-                  </Button>
-                </div>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        
-        <CardContent className="space-y-4">
-          {/* Device Info */}
-          <div className="flex items-center justify-between text-sm">
+    <Card className="w-full">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <CardTitle className="text-sm font-medium">
+          {device.name}
+        </CardTitle>
+        <div className="flex items-center gap-2">
+          <Badge variant={device.status === 'online' ? 'default' : 'secondary'}>
+            {device.status === 'online' ? (
+              <Wifi className="w-3 h-3 mr-1" />
+            ) : (
+              <WifiOff className="w-3 h-3 mr-1" />
+            )}
+            {device.status}
+          </Badge>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setShowConfigDialog(true)}
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+          {onDeleteDevice && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-destructive"
+              onClick={() => onDeleteDevice(device.id)}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-4">
+          {/* Device Details */}
+          <div className="flex flex-col space-y-1 text-xs text-muted-foreground">
             <div className="flex items-center gap-2">
-              {device.status === 'online' ? (
-                <Wifi className="w-4 h-4 text-success" />
-              ) : (
-                <WifiOff className="w-4 h-4 text-muted-foreground" />
-              )}
-              <span className="text-muted-foreground">
-                Signal: {device.signalStrength}%
-              </span>
+              <Cpu className="h-3 w-3" />
+              <span>MAC: {device.macAddress}</span>
             </div>
-            <span className="text-muted-foreground">
-              Uptime: {device.uptime}
-            </span>
+            <div>Location: {device.location}</div>
+            {device.classroom && <div>Classroom: {device.classroom}</div>}
+            <div>Last seen: {new Date(device.lastSeen).toLocaleString()}</div>
           </div>
 
           {/* Switches */}
-          <div className="space-y-2">
-            <h4 className="text-sm font-medium text-muted-foreground">Switches</h4>
-            <div className="grid grid-cols-2 gap-2">
-              {device.switches.map((switch_) => (
-                <SwitchControl
-                  key={switch_.id}
-                  switch={switch_}
-                  onToggle={() => onToggleSwitch(device.id, switch_.id)}
-                  disabled={device.status === 'offline'}
-                  isPirActive={
-                    switch_.hasPirSensor && 
-                    device.pirSensor?.isActive && 
-                    device.pirSensor.linkedSwitches.includes(switch_.id)
-                  }
-                />
-              ))}
-            </div>
+          <div className="grid gap-2">
+            {device.switches.map((switch_) => (
+              <SwitchControl
+                key={switch_.id}
+                switch={switch_}
+                onToggle={() => onToggleSwitch(device.id, switch_.id)}
+                isPirActive={switch_.usePir && device.pirEnabled}
+              />
+            ))}
           </div>
 
           {/* PIR Sensor Info */}
-          {device.pirSensor && (
-            <div className="p-3 rounded-lg bg-muted/50">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium">PIR Sensor: {device.pirSensor.name}</span>
-                <div className="flex items-center gap-2">
-                  <span className={`w-2 h-2 rounded-full ${
-                    device.pirSensor.isActive ? 'bg-green-500 animate-pulse' : 'bg-muted'
-                  }`} />
-                  <span className="text-xs text-muted-foreground">
-                    {device.pirSensor.isActive ? 'Active' : 'Idle'}
-                  </span>
-                </div>
+          {device.pirEnabled && (
+            <div className="mt-2 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">PIR Sensor</span>
+                <Badge variant="outline" className={device.pirEnabled ? 'bg-green-500/10' : 'bg-muted'}>
+                  {device.pirEnabled ? 'Active' : 'Disabled'}
+                </Badge>
               </div>
-              <div className="text-xs text-muted-foreground mt-1">
-                GPIO {device.pirSensor.gpio} • Timeout: {device.pirSensor.timeout}s • Sensitivity: {device.pirSensor.sensitivity}%
+              <div className="text-xs text-muted-foreground">
+                {device.pirGpio && `GPIO ${device.pirGpio} • `}
+                Auto-off delay: {device.pirAutoOffDelay || 30}s
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </CardContent>
 
-      {/* Only show DeviceConfigDialog if onConfigureDevice is not provided */}
-      {!onConfigureDevice && (
-        <DeviceConfigDialog
-          device={device}
-          isOpen={showConfig}
-          onClose={() => setShowConfig(false)}
-          onSave={handleConfigSave}
-        />
-      )}
-    </>
+      <DeviceConfigDialog
+        open={showConfigDialog}
+        onOpenChange={setShowConfigDialog}
+        onSubmit={handleSubmit}
+        initialData={device}
+      />
+    </Card>
   );
 };
+

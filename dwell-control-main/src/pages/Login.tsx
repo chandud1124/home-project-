@@ -95,7 +95,15 @@ const Login: React.FC = () => {
               {loading ? 'Signing in...' : 'Sign in'}
             </Button>
             <div className="text-center mt-4">
-              <p className="text-sm text-muted-foreground">
+              <Button
+                variant="link"
+                className="text-sm text-muted-foreground"
+                onClick={() => navigate('/forgot-password')}
+                type="button"
+              >
+                Forgot your password?
+              </Button>
+              <p className="text-sm text-muted-foreground mt-2">
                 Don't have an account?{' '}
                 <Button
                   variant="link"

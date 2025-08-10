@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Layout } from '@/components/Layout';
+
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
@@ -134,7 +134,6 @@ const Switches = () => {
   );
 
   return (
-    <Layout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -228,7 +227,6 @@ const Switches = () => {
           </Tabs>
         )}
       </div>
-    </Layout>
   );
 };
 

@@ -19,6 +19,35 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Settings types
+export interface NotificationSettings {
+  email: {
+    enabled: boolean;
+    recipients: string[];
+  };
+  push: {
+    enabled: boolean;
+  };
+}
+
+export interface SecuritySettings {
+  deviceOfflineThreshold: number;
+  motionDetectionEnabled: boolean;
+}
+
+export interface Settings {
+  notifications: NotificationSettings;
+  security: SecuritySettings;
+  created: string;
+  lastModified: string;
+}
+
+// Settings API endpoints
+export const getSettings = () => api.get<Settings>('/api/settings');
+
+export const updateSettings = (settings: Partial<Settings>) => 
+  api.put<Settings>('/api/settings', settings);
+
 // Handle auth errors
 api.interceptors.response.use(
   (response) => response,
@@ -32,6 +61,34 @@ api.interceptors.response.use(
     return Promise.reject(error.response?.data || error);
   }
 );
+
+// Device REST API endpoints
+export const deviceAPI = {
+  // Old deviceAPI methods
+  updateStatus: (deviceId: string, status: any) =>
+    api.post<{ success: boolean; device: any }>(`/api/device-api/${deviceId}/status`, status),
+
+  sendCommand: (deviceId: string, command: { type: string, payload: any }) =>
+    api.post<{ success: boolean }>(`/api/device-api/${deviceId}/command`, { command }),
+
+  getCommands: (deviceId: string) =>
+    api.get<{ commands: Array<{ type: string, payload: any }> }>(`/api/device-api/${deviceId}/commands`),
+
+  // New deviceAPI methods
+  getAllDevices: () => api.get('/api/devices'),
+  
+  createDevice: (deviceData: any) => api.post('/api/devices', deviceData),
+  
+  updateDevice: (deviceId: string, updates: any) => 
+    api.put(`/api/devices/${deviceId}`, updates),
+  
+  deleteDevice: (deviceId: string) => api.delete(`/api/devices/${deviceId}`),
+  
+  toggleSwitch: (deviceId: string, switchId: string, state?: boolean) =>
+    api.post(`/api/devices/${deviceId}/switches/${switchId}/toggle`, { state }),
+  
+  getStats: () => api.get('/api/devices/stats'),
+};
 
 export const authAPI = {
   login: (credentials: { email: string; password: string }) =>
@@ -58,22 +115,6 @@ export const authAPI = {
 
   resetPassword: (token: string, newPassword: string) =>
     api.post('/auth/reset-password', { token, newPassword }),
-};
-
-export const deviceAPI = {
-  getAllDevices: () => api.get('/devices'),
-  
-  createDevice: (deviceData: any) => api.post('/devices', deviceData),
-  
-  updateDevice: (deviceId: string, updates: any) => 
-    api.put(`/devices/${deviceId}`, updates),
-  
-  deleteDevice: (deviceId: string) => api.delete(`/devices/${deviceId}`),
-  
-  toggleSwitch: (deviceId: string, switchId: string, state?: boolean) =>
-    api.post(`/devices/${deviceId}/switches/${switchId}/toggle`, { state }),
-  
-  getStats: () => api.get('/devices/stats'),
 };
 
 export const scheduleAPI = {

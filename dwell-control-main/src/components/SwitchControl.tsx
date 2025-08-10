@@ -4,19 +4,10 @@ import { Button } from '@/components/ui/button';
 import { ToggleLeft, ToggleRight, Zap, Radar } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface Switch {
-  id: string;
-  name: string;
-  gpio: number;
-  state: boolean;
-  type: 'relay' | 'light' | 'fan' | 'outlet' | 'projector' | 'ac' | 'smartboard' | 'speaker';
-  hasPirSensor?: boolean;
-  pirSensorId?: string;
-  dontAutoOff?: boolean;
-}
+import { Switch as DeviceSwitch } from '@/types';
 
 interface SwitchControlProps {
-  switch: Switch;
+  switch: DeviceSwitch;
   onToggle: () => void;
   disabled?: boolean;
   isPirActive?: boolean;
@@ -81,9 +72,9 @@ export const SwitchControl: React.FC<SwitchControlProps> = ({
       
       <div className="text-center space-y-1">
         <p className="text-sm font-medium">{switchData.name}</p>
-        <p className="text-xs text-muted-foreground">GPIO {switchData.gpio}</p>
+        <p className="text-xs text-muted-foreground">GPIO {switchData.relayGpio}</p>
         
-        {switchData.hasPirSensor && (
+        {switchData.usePir && (
           <div className="flex items-center justify-center gap-1 text-xs">
             <Radar className={cn(
               "w-3 h-3",

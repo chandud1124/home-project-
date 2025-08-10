@@ -12,16 +12,35 @@ const socketIo = require('socket.io');
 // Import routes
 const authRoutes = require('./routes/auth');
 const deviceRoutes = require('./routes/devices');
+const deviceApiRoutes = require('./routes/deviceApi');
+const esp32Routes = require('./routes/esp32');
 const scheduleRoutes = require('./routes/schedules');
 const userRoutes = require('./routes/users');
 const activityRoutes = require('./routes/activities');
 const securityRoutes = require('./routes/security');
+const settingsRoutes = require('./routes/settings');
 
 // Import services
 const scheduleService = require('./services/scheduleService');
+const SocketService = require('./services/socketService');
 
 // Import Google Calendar routes
 const googleCalendarRoutes = require('./routes/googleCalendar');
+
+// MongoDB Connection
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('Connected to MongoDB');
+}).catch((err) => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1);
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('MongoDB error:', err);
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -64,13 +83,16 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/dwell-con
 
 // Mount routes
 // Mount routes
+// Mount API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/esp32', esp32Routes);
 app.use('/api/schedules', scheduleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/activities', activityRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/calendar', googleCalendarRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -86,9 +108,9 @@ mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(() => {
+.then(async () => {
   console.log('Connected to MongoDB');
-  createAdminUser();
+  await createAdminUser();
 })
 .catch((err) => {
   console.error('Database connection error:', err);

@@ -62,12 +62,22 @@ export const useDevices = () => {
 
   const addDevice = async (deviceData: Partial<Device>) => {
     try {
+      console.log('Sending device data:', deviceData);
       const response = await deviceAPI.createDevice(deviceData);
-      setDevices(prev => [...prev, response.data.data]);
-      console.log('Device added:', response.data.data);
+      
+      if (!response.data) {
+        throw new Error('No data received from server');
+      }
+
+      const newDevice = response.data.data || response.data;
+      console.log('Device added:', newDevice);
+      
+      setDevices(prev => [...prev, newDevice]);
+      return newDevice;
     } catch (err: any) {
       console.error('Error adding device:', err);
-      throw err;
+      const errorMessage = err.response?.data?.message || err.message || 'Failed to add device';
+      throw new Error(errorMessage);
     }
   };
 

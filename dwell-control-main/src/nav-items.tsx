@@ -1,5 +1,5 @@
 
-import { Home, Zap, Calendar, Users, Settings, Bell, LogOut, Shield } from "lucide-react";
+import { Home, Zap, Calendar, Users as UsersIcon, Settings as SettingsIcon, Bell, LogOut, Shield } from "lucide-react";
 import Index from "./pages/Index";
 import Devices from "./pages/Devices";
 import Switches from "./pages/Switches";
@@ -43,13 +43,13 @@ export const navItems = [
   {
     title: "Users",
     to: "/users",
-    icon: <Users className="h-4 w-4" />,
+    icon: <UsersIcon className="h-4 w-4" />,
     page: <Users />,
   },
   {
     title: "Settings",
     to: "/settings",
-    icon: <Settings className="h-4 w-4" />,
+    icon: <SettingsIcon className="h-4 w-4" />,
     page: <Settings />,
   },
 ];

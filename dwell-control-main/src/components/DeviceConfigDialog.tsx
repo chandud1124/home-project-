@@ -1,294 +1,410 @@
-
-import React, { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import React from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Trash2, Plus } from 'lucide-react';
-import { Device, Switch as SwitchType } from '@/types';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { z } from 'zod';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Device } from '@/types';
+import { Separator } from '@/components/ui/separator';
+
+const switchTypes = ['relay', 'light', 'fan', 'outlet', 'projector', 'ac'] as const;
+
+const deviceFormSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  macAddress: z.string().min(12, 'MAC address must be 12 characters').max(17, 'MAC address must be 17 characters or less'),
+  ipAddress: z.string()
+    .min(7, 'IP address is required')
+    .max(15, 'IP address must be 15 characters or less')
+    .regex(/^(\d{1,3}\.){3}\d{1,3}$/, 'Invalid IP address format')
+    .refine((val) => val.split('.').every(num => parseInt(num) >= 0 && parseInt(num) <= 255), {
+      message: "Each octet must be between 0 and 255"
+    }),
+  location: z.string().min(1, 'Location is required'),
+  classroom: z.string().optional(),
+  pirEnabled: z.boolean().default(false),
+  pirGpio: z.number().min(0).max(40).optional(),
+  pirAutoOffDelay: z.number().min(0).default(30),
+  switches: z.array(z.object({
+    name: z.string().min(1, 'Switch name is required'),
+    relayGpio: z.number().min(0).max(40),
+    type: z.enum(switchTypes),
+    manualSwitchEnabled: z.boolean().default(false),
+    manualSwitchGpio: z.number().optional(),
+    usePir: z.boolean().default(false),
+    dontAutoOff: z.boolean().default(false)
+  })).min(1, 'At least one switch is required')
+});
+
+type DeviceFormValues = z.infer<typeof deviceFormSchema>;
 
 interface DeviceConfigDialogProps {
-  device: Device;
-  isOpen: boolean;
-  onClose: () => void;
-  onSave: (deviceId: string, config: any) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (data: DeviceFormValues) => void;
+  initialData?: Device;
 }
 
-export const DeviceConfigDialog: React.FC<DeviceConfigDialogProps> = ({
-  device,
-  isOpen,
-  onClose,
-  onSave
+export const DeviceConfigDialog: React.FC<DeviceConfigDialogProps> = ({ 
+  open, 
+  onOpenChange, 
+  onSubmit, 
+  initialData 
 }) => {
-  const [switches, setSwitches] = useState<SwitchType[]>(device.switches);
-  const [pirSensor, setPirSensor] = useState(device.pirSensor);
+  const form = useForm<DeviceFormValues>({
+    resolver: zodResolver(deviceFormSchema),
+    defaultValues: initialData || {
+      name: '',
+      macAddress: '',
+      ipAddress: '',
+      location: '',
+      classroom: '',
+      pirEnabled: false,
+      pirGpio: undefined,
+      pirAutoOffDelay: 30,
+      switches: [{
+        name: '',
+        relayGpio: 0,
+        type: 'relay',
+        manualSwitchEnabled: false,
+        manualSwitchGpio: undefined,
+        usePir: false,
+        dontAutoOff: false
+      }]
+    }
+  });
 
-  const addSwitch = () => {
-    const newSwitch: SwitchType = {
-      id: `sw_${Date.now()}`,
-      name: `Switch ${switches.length + 1}`,
-      gpio: 2,
-      state: false,
-      type: 'relay',
-      hasManualSwitch: false,
-    };
-    setSwitches([...switches, newSwitch]);
+  const handleSubmit = (data: DeviceFormValues) => {
+    onSubmit(data);
+    onOpenChange(false);
   };
-
-  const removeSwitch = (switchId: string) => {
-    setSwitches(switches.filter(sw => sw.id !== switchId));
-  };
-
-  const updateSwitch = (switchId: string, updates: Partial<SwitchType>) => {
-    setSwitches(switches.map(sw => 
-      sw.id === switchId ? { ...sw, ...updates } : sw
-    ));
-  };
-
-  const handleSave = () => {
-    onSave(device.id, {
-      switches,
-      pirSensor
-    });
-    onClose();
-  };
-
-  const usedGpioPins = switches.map(sw => sw.gpio).filter(gpio => gpio);
-  if (pirSensor?.gpio) usedGpioPins.push(pirSensor.gpio);
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Configure {device.name}</DialogTitle>
+          <DialogTitle>{initialData ? 'Edit Device' : 'Add New Device'}</DialogTitle>
         </DialogHeader>
         
-        <div className="space-y-6">
-          {/* Device Info */}
-          <div className="glass p-4 rounded-lg">
-            <h3 className="font-semibold mb-2">Device Information</h3>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>IP: {device.ip}</div>
-              <div>MAC: {device.mac}</div>
-              <div>Status: {device.status}</div>
-              <div>Firmware: {device.firmware}</div>
-            </div>
-          </div>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+            <div className="space-y-4">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Device Name</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-          {/* Switches Configuration */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Switch Configuration</h3>
-              <Button onClick={addSwitch} size="sm">
-                <Plus className="w-4 h-4 mr-2" />
+              <FormField
+                control={form.control}
+                name="macAddress"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>MAC Address</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder="00:11:22:33:44:55" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="ipAddress"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>IP Address</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder="192.168.1.100" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="location"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Location</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="classroom"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Classroom (Optional)</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <Separator />
+
+            <div className="space-y-4">
+              <FormField
+                control={form.control}
+                name="pirEnabled"
+                render={({ field }) => (
+                  <FormItem className="flex items-center gap-2">
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                    <FormLabel className="!mt-0">Enable PIR Sensor</FormLabel>
+                  </FormItem>
+                )}
+              />
+
+              {form.watch('pirEnabled') && (
+                <>
+                  <FormField
+                    control={form.control}
+                    name="pirGpio"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>PIR GPIO Pin</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            {...field}
+                            onChange={(e) => field.onChange(parseInt(e.target.value))}
+                            value={field.value || ''}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="pirAutoOffDelay"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Auto-off Delay (seconds)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            {...field}
+                            onChange={(e) => field.onChange(parseInt(e.target.value))}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </>
+              )}
+            </div>
+
+            <Separator />
+
+            <div className="space-y-4">
+              {form.watch('switches')?.map((_, index) => (
+                <div key={index} className="grid gap-4 p-4 border rounded-lg">
+                  <FormField
+                    control={form.control}
+                    name={`switches.${index}.name`}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Switch Name</FormLabel>
+                        <FormControl>
+                          <Input {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name={`switches.${index}.type`}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Type</FormLabel>
+                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select type" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {switchTypes.map((type) => (
+                              <SelectItem key={type} value={type}>
+                                {type.charAt(0).toUpperCase() + type.slice(1)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name={`switches.${index}.relayGpio`}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Relay GPIO Pin</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number"
+                            {...field}
+                            onChange={(e) => field.onChange(parseInt(e.target.value))}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name={`switches.${index}.manualSwitchEnabled`}
+                    render={({ field }) => (
+                      <FormItem className="flex items-center gap-2">
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                        <FormLabel className="!mt-0">Enable Manual Switch</FormLabel>
+                      </FormItem>
+                    )}
+                  />
+
+                  {form.watch(`switches.${index}.manualSwitchEnabled`) && (
+                    <FormField
+                      control={form.control}
+                      name={`switches.${index}.manualSwitchGpio`}
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Manual Switch GPIO Pin</FormLabel>
+                          <FormControl>
+                            <Input 
+                              type="number"
+                              {...field}
+                              onChange={(e) => field.onChange(parseInt(e.target.value))}
+                              value={field.value || ''}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {form.watch('pirEnabled') && (
+                    <>
+                      <FormField
+                        control={form.control}
+                        name={`switches.${index}.usePir`}
+                        render={({ field }) => (
+                          <FormItem className="flex items-center gap-2">
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                            <FormLabel className="!mt-0">Link to PIR Sensor</FormLabel>
+                          </FormItem>
+                        )}
+                      />
+
+                      {form.watch(`switches.${index}.usePir`) && (
+                        <FormField
+                          control={form.control}
+                          name={`switches.${index}.dontAutoOff`}
+                          render={({ field }) => (
+                            <FormItem className="flex items-center gap-2">
+                              <FormControl>
+                                <Switch
+                                  checked={field.value}
+                                  onCheckedChange={field.onChange}
+                                />
+                              </FormControl>
+                              <FormLabel className="!mt-0">Keep On After Motion Stops</FormLabel>
+                            </FormItem>
+                          )}
+                        />
+                      )}
+                    </>
+                  )}
+
+                  {index > 0 && (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={() => {
+                        const switches = form.getValues('switches');
+                        switches.splice(index, 1);
+                        form.setValue('switches', [...switches]);
+                      }}
+                    >
+                      Remove Switch
+                    </Button>
+                  )}
+                </div>
+              ))}
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const switches = form.getValues('switches');
+                  form.setValue('switches', [
+                    ...switches,
+                    {
+                      name: '',
+                      relayGpio: 0,
+                      type: 'relay',
+                      manualSwitchEnabled: false,
+                      manualSwitchGpio: undefined,
+                      usePir: false,
+                      dontAutoOff: false
+                    }
+                  ]);
+                }}
+              >
                 Add Switch
               </Button>
             </div>
 
-            {switches.map((switch_, index) => (
-              <div key={switch_.id} className="glass p-4 rounded-lg space-y-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-medium">Switch {index + 1}</h4>
-                  <Button
-                    onClick={() => removeSwitch(switch_.id)}
-                    size="sm"
-                    variant="destructive"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Switch Name</Label>
-                    <Input
-                      value={switch_.name}
-                      onChange={(e) => updateSwitch(switch_.id, { name: e.target.value })}
-                      placeholder="Enter switch name"
-                    />
-                  </div>
-
-                  <div>
-                    <Label>GPIO Pin</Label>
-                    <Select 
-                      value={switch_.gpio.toString()} 
-                      onValueChange={(value) => updateSwitch(switch_.id, { gpio: parseInt(value) })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {[2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27].map(pin => (
-                          <SelectItem 
-                            key={pin} 
-                            value={pin.toString()}
-                            disabled={usedGpioPins.includes(pin) && switch_.gpio !== pin}
-                          >
-                            GPIO {pin} {usedGpioPins.includes(pin) && switch_.gpio !== pin ? '(Used)' : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label>Switch Type</Label>
-                    <Select 
-                      value={switch_.type} 
-                      onValueChange={(value) => updateSwitch(switch_.id, { type: value as any })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="relay">Relay</SelectItem>
-                        <SelectItem value="light">Light</SelectItem>
-                        <SelectItem value="fan">Fan</SelectItem>
-                        <SelectItem value="outlet">Outlet</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <Switch
-                        checked={switch_.hasManualSwitch || false}
-                        onCheckedChange={(checked) => updateSwitch(switch_.id, { hasManualSwitch: checked })}
-                      />
-                      <Label>Has Manual Switch</Label>
-                    </div>
-
-                    {switch_.hasManualSwitch && (
-                      <Select 
-                        value={switch_.manualSwitchGpio?.toString() || ''} 
-                        onValueChange={(value) => updateSwitch(switch_.id, { manualSwitchGpio: parseInt(value) })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select GPIO for manual switch" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {[0, 1, 3, 6, 7, 8, 9, 10, 11, 20, 24, 28, 29, 30, 31].map(pin => (
-                            <SelectItem 
-                              key={pin} 
-                              value={pin.toString()}
-                              disabled={usedGpioPins.includes(pin)}
-                            >
-                              GPIO {pin} {usedGpioPins.includes(pin) ? '(Used)' : ''}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      checked={switch_.hasPirSensor || false}
-                      onCheckedChange={(checked) => updateSwitch(switch_.id, { hasPirSensor: checked })}
-                    />
-                    <Label>Enable PIR Control</Label>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* PIR Sensor Configuration */}
-          <div className="space-y-4">
-            <div className="flex items-center space-x-2">
-              <Switch
-                checked={!!pirSensor}
-                onCheckedChange={(checked) => {
-                  if (checked) {
-                    setPirSensor({
-                      id: 'pir_main',
-                      name: 'PIR Sensor',
-                      gpio: 16,
-                      isActive: true,
-                      sensitivity: 80,
-                      timeout: 300,
-                      linkedSwitches: []
-                    });
-                  } else {
-                    setPirSensor(undefined);
-                  }
-                }}
-              />
-              <Label className="font-semibold">Enable PIR Sensor</Label>
-            </div>
-
-            {pirSensor && (
-              <div className="glass p-4 rounded-lg space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Sensor Name</Label>
-                    <Input
-                      value={pirSensor.name}
-                      onChange={(e) => setPirSensor({...pirSensor, name: e.target.value})}
-                      placeholder="PIR Sensor name"
-                    />
-                  </div>
-
-                  <div>
-                    <Label>GPIO Pin</Label>
-                    <Select 
-                      value={pirSensor.gpio.toString()} 
-                      onValueChange={(value) => setPirSensor({...pirSensor, gpio: parseInt(value)})}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {[16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39].map(pin => (
-                          <SelectItem 
-                            key={pin} 
-                            value={pin.toString()}
-                            disabled={usedGpioPins.includes(pin) && pirSensor.gpio !== pin}
-                          >
-                            GPIO {pin} {usedGpioPins.includes(pin) && pirSensor.gpio !== pin ? '(Used)' : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label>Sensitivity (%)</Label>
-                    <Input
-                      type="number"
-                      min="1"
-                      max="100"
-                      value={pirSensor.sensitivity}
-                      onChange={(e) => setPirSensor({...pirSensor, sensitivity: parseInt(e.target.value)})}
-                    />
-                  </div>
-
-                  <div>
-                    <Label>Auto-off Timeout (seconds)</Label>
-                    <Input
-                      type="number"
-                      min="10"
-                      max="3600"
-                      value={pirSensor.timeout}
-                      onChange={(e) => setPirSensor({...pirSensor, timeout: parseInt(e.target.value)})}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex justify-end space-x-2">
-            <Button variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button onClick={handleSave}>
-              Save Configuration
-            </Button>
-          </div>
-        </div>
+            <DialogFooter>
+              <Button type="submit">Save Changes</Button>
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

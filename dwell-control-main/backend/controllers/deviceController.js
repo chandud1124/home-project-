@@ -24,8 +24,58 @@ const getAllDevices = async (req, res) => {
 
 const createDevice = async (req, res) => {
   try {
+    const {
+      name,
+      macAddress,
+      ipAddress,
+      location,
+      classroom,
+      pirEnabled,
+      pirGpio,
+      pirAutoOffDelay,
+      switches
+    } = req.body;
+
+    console.log('Creating device with data:', req.body);
+
+    // Validate MAC address format
+    const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+    if (!macRegex.test(macAddress)) {
+      return res.status(400).json({ message: 'Invalid MAC address format' });
+    }
+
+    // Validate IP address format
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (!ipRegex.test(ipAddress)) {
+      return res.status(400).json({ message: 'Invalid IP address format' });
+    }
+
+    // Check for duplicate MAC address
+    const existingDeviceMAC = await Device.findOne({ macAddress });
+    if (existingDeviceMAC) {
+      return res.status(400).json({ message: 'Device with this MAC address already exists' });
+    }
+
+    // Check for duplicate IP address
+    const existingDeviceIP = await Device.findOne({ ipAddress });
+    if (existingDeviceIP) {
+      return res.status(400).json({ message: 'Device with this IP address already exists' });
+    }
+
     const device = await Device.create({
-      ...req.body,
+      name,
+      macAddress,
+      ipAddress,
+      location,
+      classroom,
+      pirEnabled,
+      pirGpio,
+      pirAutoOffDelay,
+      switches: switches.map(sw => ({
+        ...sw,
+        state: false // Ensure initial state is off
+      })),
+      status: 'offline', // Initial status
       assignedUsers: [req.user.id]
     });
 
@@ -42,12 +92,24 @@ const createDevice = async (req, res) => {
       userAgent: req.get('User-Agent')
     });
 
+    // Emit device created event
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('deviceCreated', device);
+    }
+
     res.status(201).json({
       success: true,
+      message: 'Device created successfully',
       data: device
     });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error('Error creating device:', error);
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Error creating device',
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 

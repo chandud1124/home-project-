@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Layout } from '@/components/Layout';
+
 import { MasterSwitchCard } from '@/components/MasterSwitchCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -78,7 +78,6 @@ const Master = () => {
   };
 
   return (
-    <Layout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -192,7 +191,6 @@ const Master = () => {
           </div>
         </div>
       </div>
-    </Layout>
   );
 };
 

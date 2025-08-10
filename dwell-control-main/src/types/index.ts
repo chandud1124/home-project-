@@ -1,16 +1,16 @@
 
 export interface Device {
+  pirSensor: unknown;
   id: string;
   name: string;
-  ip: string;
-  mac: string;
+  macAddress: string;
+  ipAddress: string;
   status: 'online' | 'offline';
-  signalStrength: number;
-  uptime: string;
   switches: Switch[];
-  pirSensor?: PirSensor;
+  pirEnabled: boolean;
+  pirGpio?: number;
+  pirAutoOffDelay?: number;
   lastSeen: Date;
-  firmware: string;
   location?: string;
   classroom?: string;
   assignedUsers?: string[];
@@ -19,14 +19,13 @@ export interface Device {
 export interface Switch {
   id: string;
   name: string;
-  gpio: number;
+  relayGpio: number;
   state: boolean;
-  type: 'relay' | 'light' | 'fan' | 'outlet' | 'projector' | 'ac' | 'smartboard' | 'speaker';
+  type: 'relay' | 'light' | 'fan' | 'outlet' | 'projector' | 'ac';
   icon?: string;
-  hasManualSwitch?: boolean;
+  manualSwitchEnabled: boolean;
   manualSwitchGpio?: number;
-  hasPirSensor?: boolean;
-  pirSensorId?: string;
+  usePir: boolean;
   schedule?: Schedule[];
   powerConsumption?: number;
   dontAutoOff?: boolean;

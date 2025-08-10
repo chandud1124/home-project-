@@ -1,33 +1,24 @@
-
 import React, { useState } from 'react';
-import { Layout } from '@/components/Layout';
-import { DeviceCard } from '@/components/DeviceCard';
+import DeviceCard from '@/components/DeviceCard';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Cpu, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useDevices } from '@/hooks/useDevices';
 import { useToast } from '@/hooks/use-toast';
+import { DeviceConfigDialog } from '@/components/DeviceConfigDialog';
+import { Device } from '@/types';
 
 const Devices = () => {
   const { devices, toggleSwitch, updateDevice, deleteDevice, addDevice } = useDevices();
   const { toast } = useToast();
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [newDevice, setNewDevice] = useState({
-    name: '',
-    ip: '',
-    mac: '',
-    location: ''
-  });
+  const [showConfigDialog, setShowConfigDialog] = useState(false);
+  const [selectedDevice, setSelectedDevice] = useState<Device | undefined>(undefined);
 
   const handleToggleSwitch = async (deviceId: string, switchId: string) => {
     try {
       await toggleSwitch(deviceId, switchId);
       toast({
-        title: "Switch Toggled",
-        description: "Switch state updated successfully"
+        title: "Success",
+        description: "Switch toggled successfully"
       });
     } catch (error) {
       toast({
@@ -38,13 +29,14 @@ const Devices = () => {
     }
   };
 
-  const handleUpdateDevice = async (deviceId: string, updates: any) => {
+  const handleUpdateDevice = async (deviceId: string, data: Partial<Device>) => {
     try {
-      await updateDevice(deviceId, updates);
+      await updateDevice(deviceId, data);
       toast({
-        title: "Device Updated",
-        description: "Device configuration saved successfully"
+        title: "Success",
+        description: "Device updated successfully"
       });
+      setShowConfigDialog(false);
     } catch (error) {
       toast({
         title: "Error",
@@ -58,8 +50,8 @@ const Devices = () => {
     try {
       await deleteDevice(deviceId);
       toast({
-        title: "Device Deleted",
-        description: "Device removed successfully"
+        title: "Success",
+        description: "Device deleted successfully"
       });
     } catch (error) {
       toast({
@@ -70,145 +62,99 @@ const Devices = () => {
     }
   };
 
-  const handleAddDevice = async () => {
-    if (!newDevice.name || !newDevice.ip) {
-      toast({
-        title: "Validation Error",
-        description: "Please provide device name and IP address",
-        variant: "destructive"
-      });
-      return;
-    }
-
+  const handleAddDevice = async (deviceData: Device) => {
     try {
-      await addDevice({
-        name: newDevice.name,
-        ip: newDevice.ip,
-        mac: newDevice.mac,
-        location: newDevice.location,
-        switches: []
-      });
-      setNewDevice({ name: '', ip: '', mac: '', location: '' });
-      setShowAddDialog(false);
+      await addDevice(deviceData);
       toast({
-        title: "Device Added",
-        description: "New device has been added successfully"
+        title: "Success",
+        description: "Device added successfully"
       });
-    } catch (error: any) {
-      let description = "Failed to add device";
-      if (error?.response?.data?.error) {
-        description = error.response.data.error;
-      } else if (error?.message) {
-        description = error.message;
-      }
+      setShowConfigDialog(false);
+    } catch (error) {
       toast({
         title: "Error",
-        description,
+        description: "Failed to add device",
         variant: "destructive"
       });
     }
   };
 
+  if (!devices) {
+    return <div>Loading...</div>;
+  }
+
   return (
-    <Layout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">
-              Device Management
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Manage and configure your ESP32 devices
-            </p>
-          </div>
-          <Button onClick={() => setShowAddDialog(true)}>
-            <Plus className="w-4 h-4 mr-2" />
-            Add Device
-          </Button>
-        </div>
-
-        {devices.length === 0 ? (
-          <div className="text-center py-12">
-            <Cpu className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-medium mb-2">No devices found</h3>
-            <p className="text-muted-foreground mb-4">
-              Add your first ESP32 device to get started
-            </p>
-            <Button onClick={() => setShowAddDialog(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Add Device
-            </Button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            {devices.map((device) => (
-              <DeviceCard
-                key={device.id}
-                device={device}
-                onToggleSwitch={handleToggleSwitch}
-                onUpdateDevice={handleUpdateDevice}
-                onDeleteDevice={handleDeleteDevice}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Add Device Dialog */}
-        <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Device</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="device-name">Device Name</Label>
-                <Input
-                  id="device-name"
-                  value={newDevice.name}
-                  onChange={(e) => setNewDevice({...newDevice, name: e.target.value})}
-                  placeholder="e.g., Living Room ESP32"
-                />
-              </div>
-              <div>
-                <Label htmlFor="device-ip">IP Address</Label>
-                <Input
-                  id="device-ip"
-                  value={newDevice.ip}
-                  onChange={(e) => setNewDevice({...newDevice, ip: e.target.value})}
-                  placeholder="e.g., 192.168.1.101"
-                />
-              </div>
-              <div>
-                <Label htmlFor="device-mac">MAC Address (Optional)</Label>
-                <Input
-                  id="device-mac"
-                  value={newDevice.mac}
-                  onChange={(e) => setNewDevice({...newDevice, mac: e.target.value})}
-                  placeholder="e.g., 24:6F:28:AE:97:12"
-                />
-              </div>
-              <div>
-                <Label htmlFor="device-location">Location/Room</Label>
-                <Input
-                  id="device-location"
-                  value={newDevice.location}
-                  onChange={(e) => setNewDevice({...newDevice, location: e.target.value})}
-                  placeholder="e.g., Living Room, Kitchen"
-                />
-              </div>
-              <div className="flex justify-end space-x-2">
-                <Button variant="outline" onClick={() => setShowAddDialog(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleAddDevice}>
-                  Add Device
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+    <div className="container mx-auto py-6">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold">Devices</h1>
+        <Button
+          onClick={() => {
+            setSelectedDevice(undefined);
+            setShowConfigDialog(true);
+          }}
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Add Device
+        </Button>
       </div>
-    </Layout>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {devices.map((device) => (
+          <DeviceCard
+            key={device.id}
+            device={device}
+            onToggleSwitch={handleToggleSwitch}
+            onUpdateDevice={(deviceId, data) => {
+              setSelectedDevice(device);
+              setShowConfigDialog(true);
+            }}
+            onDeleteDevice={handleDeleteDevice}
+          />
+        ))}
+      </div>
+
+      <DeviceConfigDialog
+        open={showConfigDialog}
+        onOpenChange={setShowConfigDialog}
+        onSubmit={(data) => {
+          if (selectedDevice) {
+            handleUpdateDevice(selectedDevice.id, {
+              ...data,
+              switches: data.switches.map(sw => ({
+                id: selectedDevice.switches.find(s => s.name === sw.name)?.id || `switch-${Date.now()}-${Math.random()}`,
+                name: sw.name || 'Unnamed Switch',
+                type: sw.type || 'relay',
+                relayGpio: sw.relayGpio || 0,
+                state: false,
+                manualSwitchEnabled: sw.manualSwitchEnabled || false,
+                manualSwitchGpio: sw.manualSwitchGpio,
+                usePir: sw.usePir || false,
+                dontAutoOff: sw.dontAutoOff || false
+              }))
+            });
+          } else {
+            handleAddDevice({
+              ...data,
+              id: `device-${Date.now()}`,
+              status: 'offline',
+              lastSeen: new Date(),
+              switches: data.switches.map((sw, idx) => ({
+                id: `switch-${Date.now()}-${idx}`,
+                name: sw.name || 'Unnamed Switch',
+                type: sw.type || 'relay',
+                relayGpio: sw.relayGpio || 0,
+                state: false,
+                manualSwitchEnabled: sw.manualSwitchEnabled || false,
+                manualSwitchGpio: sw.manualSwitchGpio,
+                usePir: sw.usePir || false,
+                dontAutoOff: sw.dontAutoOff || false
+              }))
+            } as Device);
+          }
+        }}
+        initialData={selectedDevice}
+      />
+    </div>
   );
 };
 

@@ -1,6 +1,7 @@
 
-import React, { useState } from 'react';
-import { Layout } from '@/components/Layout';
+import React, { useState, useEffect } from 'react';
+
+import api from '@/services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,94 +24,117 @@ interface User {
 
 const Users = () => {
   const { toast } = useToast();
-  const [users, setUsers] = useState<User[]>([
-    {
-      id: '1',
-      name: 'Admin User',
-      email: 'admin@college.edu',
-      role: 'admin',
-      isActive: true,
-      lastLogin: new Date(Date.now() - 300000),
-      assignedDevices: ['1', '2'],
-      department: 'IT Department',
-      accessLevel: 'full'
-    },
-    {
-      id: '2',
-      name: 'Dr. John Smith',
-      email: 'john.smith@college.edu',
-      role: 'faculty',
-      isActive: true,
-      lastLogin: new Date(Date.now() - 3600000),
-      assignedDevices: ['1'],
-      department: 'Computer Science',
-      accessLevel: 'limited'
-    },
-    {
-      id: '3',
-      name: 'Security Officer',
-      email: 'security@college.edu',
-      role: 'security',
-      isActive: true,
-      lastLogin: new Date(Date.now() - 1800000),
-      assignedDevices: ['1', '2'],
-      department: 'Security',
-      accessLevel: 'readonly'
-    }
-  ]);
+  const [users, setUsers] = useState<User[]>([]);
+  
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const response = await api.get('/api/users');
+        setUsers(response.data);
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: "Failed to fetch users",
+          variant: "destructive"
+        });
+      }
+    };
+
+    fetchUsers();
+  }, [toast]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
 
-  const handleAddUser = (userData: any) => {
-    const newUser: User = {
-      id: Date.now().toString(),
-      isActive: true,
-      lastLogin: new Date(),
-      ...userData
-    };
-    
-    setUsers(prev => [...prev, newUser]);
-    toast({
-      title: "User Added",
-      description: `${userData.name} has been added successfully`
-    });
+  const handleAddUser = async (userData: any) => {
+    try {
+      const response = await api.post('/api/users', userData);
+      setUsers(prev => [...prev, response.data]);
+      toast({
+        title: "User Added",
+        description: `${userData.name} has been added successfully`
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to add user",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleEditUser = (userData: any) => {
+  const handleEditUser = async (userData: any) => {
     if (!editingUser) return;
     
-    setUsers(prev => 
-      prev.map(user => 
-        user.id === editingUser.id 
-          ? { ...user, ...userData }
-          : user
-      )
-    );
-    
-    setEditingUser(null);
-    toast({
-      title: "User Updated",
-      description: `${userData.name} has been updated successfully`
-    });
+    try {
+      const response = await api.put(`/api/users/${editingUser.id}`, userData);
+      setUsers(prev => 
+        prev.map(user => 
+          user.id === editingUser.id 
+            ? response.data
+            : user
+        )
+      );
+      
+      setEditingUser(null);
+      toast({
+        title: "User Updated",
+        description: `${userData.name} has been updated successfully`
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update user",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleDeleteUser = (userId: string) => {
-    setUsers(prev => prev.filter(u => u.id !== userId));
-    toast({
-      title: "User Deleted",
-      description: "User has been removed successfully"
-    });
+  const handleDeleteUser = async (userId: string) => {
+    try {
+      await api.delete(`/api/users/${userId}`);
+      setUsers(prev => prev.filter(u => u.id !== userId));
+      toast({
+        title: "User Deleted",
+        description: "User has been removed successfully"
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete user",
+        variant: "destructive"
+      });
+    }
   };
 
-  const toggleUserStatus = (userId: string) => {
-    setUsers(prev => 
-      prev.map(user => 
-        user.id === userId 
-          ? { ...user, isActive: !user.isActive }
-          : user
-      )
-    );
+  const toggleUserStatus = async (userId: string) => {
+    try {
+      const user = users.find(u => u.id === userId);
+      if (!user) return;
+      
+      const response = await api.patch(`/api/users/${userId}/status`, {
+        isActive: !user.isActive
+      });
+      
+      setUsers(prev => 
+        prev.map(u => 
+          u.id === userId 
+            ? response.data
+            : u
+        )
+      );
+      
+      toast({
+        title: "Status Updated",
+        description: `User ${response.data.isActive ? 'activated' : 'deactivated'} successfully`
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update user status",
+        variant: "destructive"
+      });
+    }
   };
 
   const getRoleIcon = (role: string) => {
@@ -147,7 +171,6 @@ const Users = () => {
   };
 
   return (
-    <Layout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -268,7 +291,6 @@ const Users = () => {
           user={editingUser}
         />
       </div>
-    </Layout>
   );
 };
 

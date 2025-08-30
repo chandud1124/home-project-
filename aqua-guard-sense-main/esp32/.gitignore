@@ -1,0 +1,21 @@
+# ESP32 Development Files
+*.tmp
+*.bak
+*.old
+
+# Arduino IDE files
+*.ino.xml
+*.ino.with_bootloader.bin
+*.ino.without_bootloader.bin
+
+# Build files
+build/
+.cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+temp/
+tmp/

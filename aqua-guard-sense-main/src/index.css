@@ -1,0 +1,126 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Industrial Water Monitoring Design System */
+
+@layer base {
+  :root {
+    /* Core Brand Colors - Industrial Blue Theme */
+    --primary: 213 94% 68%; /* Bright industrial blue */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 213 27% 24%;
+    
+    /* Status Colors */
+    --success: 142 76% 36%; /* Tank OK green */
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%; /* Caution yellow */
+    --warning-foreground: 0 0% 0%;
+    --danger: 0 84% 60%; /* Critical red */
+    --danger-foreground: 0 0% 100%;
+    
+    /* Tank Level Colors */
+    --tank-full: 199 89% 48%; /* Deep blue for full */
+    --tank-medium: 213 94% 68%; /* Medium blue */
+    --tank-low: 17 88% 40%; /* Orange for low */
+    --tank-empty: 0 84% 60%; /* Red for empty */
+    
+    /* Surface Colors */
+    --background: 220 26% 14%; /* Dark industrial background */
+    --foreground: 220 9% 89%;
+    --card: 220 23% 18%;
+    --card-foreground: 220 9% 89%;
+    --muted: 220 17% 24%;
+    --muted-foreground: 220 9% 65%;
+    --accent: 213 94% 68%;
+    --accent-foreground: 0 0% 100%;
+    
+    /* Interactive Elements */
+    --border: 220 17% 32%;
+    --input: 220 17% 24%;
+    --ring: 213 94% 68%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    /* Motor Status */
+    --motor-running: 142 76% 36%;
+    --motor-stopped: 220 9% 46%;
+    --motor-error: 0 84% 60%;
+    
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+/* Custom animations for water monitoring */
+@keyframes water-flow {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  25% { transform: translateY(-2px) rotate(1deg); }
+  50% { transform: translateY(-4px) rotate(0deg); }
+  75% { transform: translateY(-2px) rotate(-1deg); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px hsl(var(--accent)); }
+  50% { box-shadow: 0 0 20px hsl(var(--accent)), 0 0 30px hsl(var(--accent)); }
+}
+
+@keyframes tank-fill {
+  0% { height: 0%; }
+  100% { height: var(--fill-level); }
+}
+
+.animate-water-flow {
+  animation: water-flow 3s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-tank-fill {
+  animation: tank-fill 2s ease-out forwards;
+}
+
+/* Utility classes for monitoring system */
+.status-indicator {
+  @apply w-3 h-3 rounded-full animate-pulse;
+}
+
+.status-online { @apply bg-green-500; }
+.status-warning { @apply bg-yellow-500; }
+.status-error { @apply bg-red-500; }
+.status-offline { @apply bg-gray-500; }
+
+/* Tank level indicators */
+.tank-level-full { @apply text-blue-500; }
+.tank-level-medium { @apply text-blue-400; }
+.tank-level-low { @apply text-orange-500; }
+.tank-level-empty { @apply text-red-500; }
+
+/* Motor status indicators */
+.motor-running {
+  @apply bg-green-500 text-white;
+  box-shadow: 0 0 10px hsl(var(--motor-running));
+}
+
+.motor-stopped {
+  @apply bg-gray-500 text-white;
+}
+
+.motor-error {
+  @apply bg-red-500 text-white;
+  animation: pulse-glow 1s ease-in-out infinite;
+}

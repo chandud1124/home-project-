@@ -4,17 +4,17 @@
  *
  * Features:
  * - WiFi connectivity with WebSocket communication
- * - SR04M-2 Ultrasonic sensor for water level measurement (UART)
+ * - HC-SR04 Ultrasonic sensor for water level measurement (TRIG/ECHO)
  * - Real-time data transmission
  * - Simple monitoring without motor control
  *
  * Hardware Requirements:
  * - ESP32 Dev Board
- * - SR04M-2 Ultrasonic Sensor (UART communication)
- * - Wiring: ESP32 TX (GPIO 17) → SR04M-2 RX
- *          ESP32 RX (GPIO 16) → SR04M-2 TX
- *          ESP32 GND → SR04M-2 GND
- *          ESP32 5V → SR04M-2 VCC
+ * - HC-SR04 Ultrasonic Sensor (TRIG/ECHO mode)
+ * - Wiring: HC-SR04 TRIG → ESP32 GPIO 5
+ *          HC-SR04 ECHO → ESP32 GPIO 18
+ *          HC-SR04 GND → ESP32 GND
+ *          HC-SR04 VCC → ESP32 5V
  * - Optional: Buzzer (GPIO 14)
  * - Optional: LED (GPIO 15)
  */
@@ -36,13 +36,11 @@ const char* DEVICE_TYPE = "top_tank";
 const char* DEVICE_ID = "ESP32_TOP_001";
 
 // Hardware Pin Configuration
-const int RX_PIN = 16;        // ESP32 RX pin (connect to SR04M-2 TX)
-const int TX_PIN = 17;        // ESP32 TX pin (connect to SR04M-2 RX)
+// HC-SR04 Ultrasonic Sensor Pins
+#define TRIGPIN 5
+#define ECHOPIN 18
 const int BUZZER_PIN = 14;    // Optional
 const int LED_PIN = 15;       // Optional
-
-// SR04M-2 Serial Communication
-HardwareSerial ultrasonicSerial(1); // Use UART1 for SR04M-2
 
 // Tank Configuration
 const float TANK_HEIGHT_CM = 150.0;  // Height of top tank in cm
@@ -66,6 +64,8 @@ bool websocketConnected = false;
 float currentLevel = 0.0;
 float waterVolume = 0.0;
 String alertStatus = "normal";
+float duration = 0.0;
+float distance = 0.0;
 
 // Alert states
 bool lowLevelAlert = false;
@@ -285,103 +285,24 @@ float calculateVolume(float levelPercent) {
   return volume;
 }
 
-// Read SR04M-2 ultrasonic sensor via UART
+// Read HC-SR04 ultrasonic sensor via TRIG/ECHO pins
 float readUltrasonicLevel() {
-  // Clear any pending data first
-  while (ultrasonicSerial.available()) {
-    ultrasonicSerial.read();
-  }
-  
-  // Send measurement command to SR04M-2
-  ultrasonicSerial.write(0x55); // SR04M-2 measurement command
-  ultrasonicSerial.flush(); // Wait for transmission to complete
-  
-  Serial.println("📤 Sent 0x55 to SR04M-2");
-  
-  // Wait for response with timeout
-  unsigned long startTime = millis();
-  int availableBytes = 0;
-  
-  while ((millis() - startTime) < 200) { // 200ms timeout
-    availableBytes = ultrasonicSerial.available();
-    if (availableBytes >= 2) break; // We need at least 2 bytes for distance
-    delay(5);
-  }
-  
-  Serial.print("📥 Available bytes: ");
-  Serial.println(availableBytes);
-  
-  if (availableBytes < 2) {
-    Serial.println("❌ Insufficient data from SR04M-2");
-    return -1; // Insufficient data
-  }
-  
-  if (availableBytes > 2) {
-    Serial.print("⚠️  Extra data received: ");
-    Serial.println(availableBytes);
-  }
-  
-  // Read response (2 bytes for distance in mm)
-  byte buffer[2];
-  int bytesRead = ultrasonicSerial.readBytes(buffer, 2);
-  
-  Serial.print("📖 Bytes read: ");
-  Serial.print(bytesRead);
-  Serial.print(" | Data: ");
-  for (int i = 0; i < bytesRead; i++) {
-    Serial.print("0x");
-    if (buffer[i] < 16) Serial.print("0");
-    Serial.print(buffer[i], HEX);
-    if (i < bytesRead - 1) Serial.print(" ");
-  }
-  Serial.println();
-  
-  if (bytesRead != 2) {
-    Serial.println("❌ Incomplete response from SR04M-2");
-    return -1; // Incomplete response
-  }
-  
-  // Calculate distance from response (2 bytes: high byte + low byte = distance in mm)
-  int distance_mm = (buffer[0] << 8) | buffer[1];
-  float distance_cm = distance_mm / 10.0;
-  
-  Serial.print("📏 Raw distance: ");
-  Serial.print(distance_mm);
-  Serial.print("mm (");
-  Serial.print(distance_cm);
-  Serial.println("cm)");
-  
-  // Check for invalid readings (allow 0mm as full tank)
-  if (distance_mm < 0) {
-    Serial.println("❌ Invalid distance reading (< 0mm)");
-    return -1; // Invalid reading
-  }
-  
-  // If distance is 0mm, assume tank is full (water at sensor level)
-  if (distance_mm == 0) {
-    Serial.println("💧 Tank appears to be full (0mm distance)");
-    return 100.0; // Full tank
-  }
-  
-  // SR04M-2 minimum detection distance is 25cm
-  if (distance_cm < 25.0) {
-    Serial.println("❌ Distance too close for SR04M-2 (< 25cm)");
-    return -1; // Too close for SR04M-2
-  }
-  
-  // SR04M-2 maximum detection distance is 400cm
-  if (distance_cm > 400.0) {
-    Serial.println("❌ Distance too far for SR04M-2 (> 400cm)");
-    return -1; // Too far for SR04M-2
-  }
+  digitalWrite(TRIGPIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIGPIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGPIN, LOW);
 
-  float waterHeight = TANK_HEIGHT_CM - distance_cm;
+  duration = pulseIn(ECHOPIN, HIGH);
+  distance = (duration * 0.0343) / 2;
+
+  Serial.print("distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // Calculate water level percentage
+  float waterHeight = TANK_HEIGHT_CM - distance;
   float levelPercent = (waterHeight / TANK_HEIGHT_CM) * 100.0;
-  
-  Serial.print("💧 Water level: ");
-  Serial.print(levelPercent, 1);
-  Serial.println("%");
-
   return constrain(levelPercent, 0, 100);
 }
 
@@ -550,28 +471,17 @@ void connectToWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\n=== Aqua Guard Sense ESP32 Top Tank Starting ===");
-  Serial.println("Sensor: SR04M-2 Ultrasonic Sensor (UART)");
-  Serial.println("⚠️  IMPORTANT: Connect SR04M-2 to UART pins!");
-  Serial.println("   ESP32 TX (GPIO 17) → SR04M-2 RX");
-  Serial.println("   ESP32 RX (GPIO 16) → SR04M-2 TX");
-  Serial.println("   ESP32 GND → SR04M-2 GND");
-  Serial.println("   ESP32 5V → SR04M-2 VCC");
+  Serial.println("Sensor: HC-SR04 Ultrasonic Sensor (TRIG/ECHO)");
+  Serial.println("⚠️  IMPORTANT: Connect HC-SR04 to digital pins!");
+  Serial.println("   HC-SR04 TRIG → ESP32 GPIO 5");
+  Serial.println("   HC-SR04 ECHO → ESP32 GPIO 18");
+  Serial.println("   HC-SR04 GND → ESP32 GND");
+  Serial.println("   HC-SR04 VCC → ESP32 5V");
 
-  // Initialize SR04M-2 UART communication
-  ultrasonicSerial.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
-  Serial.println("SR04M-2 UART initialized at 9600 baud");
-  Serial.print("RX Pin: GPIO ");
-  Serial.println(RX_PIN);
-  Serial.print("TX Pin: GPIO ");
-  Serial.println(TX_PIN);
-  
-  // Test SR04M-2 communication
-  delay(1000); // Wait for sensor to initialize
-  testSR04M2Communication();
-  
-  // If communication test failed, try different baud rates
-  Serial.println("\n🔄 If the above test failed, trying different baud rates...");
-  testDifferentBaudRates();
+  // Initialize HC-SR04 pins
+  pinMode(TRIGPIN, OUTPUT);
+  pinMode(ECHOPIN, INPUT);
+  Serial.println("HC-SR04 initialized (TRIG/ECHO mode)");
 
   // Initialize optional pins
   pinMode(BUZZER_PIN, OUTPUT);

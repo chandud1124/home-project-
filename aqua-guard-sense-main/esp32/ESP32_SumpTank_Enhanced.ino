@@ -9,7 +9,7 @@
  *
  * Features:
  * - WiFi connectivity with WebSocket communication
- * - SR04M-2 Ultrasonic sensor for water level measurement (UART)
+ * - HC-SR04 Ultrasonic sensor for water level measurement (TRIG/ECHO)
  * - Float switch for dual-sensor verification
  * - Motor control with safety features
  * - Manual override button
@@ -18,13 +18,14 @@
  *
  * Hardware Requirements:
  * - ESP32 Dev Board
- * - SR04M-2 Ultrasonic Sensor (UART communication)
- * - Wiring: ESP32 TX (GPIO 17) → SR04M-2 RX
- *          ESP32 RX (GPIO 16) → SR04M-2 TX
- *          ESP32 GND → SR04M-2 GND
- *          ESP32 5V → SR04M-2 VCC
+ * - HC-SR04 Ultrasonic Sensor (TRIG/ECHO mode)
+ * - Wiring: HC-SR04 TRIG → ESP32 GPIO 5
+ *          HC-SR04 ECHO → ESP32 GPIO 18
+ *          HC-SR04 GND → ESP32 GND
+ *          HC-SR04 VCC → ESP32 5V
  * - Float Switch (GPIO 4)
- * - Manual Button (GPIO 12)
+ * - Manual Button (GPIO 12) - Toggles auto/manual mode
+ * - Motor On Switch (GPIO 19) - Directly starts motor
  * - Relay Module for motor (GPIO 13)
  * - Buzzer (GPIO 14) - Optional
  * - LED (GPIO 15) - Optional
@@ -45,16 +46,16 @@ const char* DEVICE_TYPE = "sump_tank";
 const char* DEVICE_ID = "ESP32_SUMP_001";
 
 // Hardware Pin Configuration
-const int RX_PIN = 16;        // SR04M-2 RX pin (connect to ESP32 TX)
-const int TX_PIN = 17;        // SR04M-2 TX pin (connect to ESP32 RX)
 const int FLOAT_SWITCH_PIN = 4;
 const int MANUAL_BUTTON_PIN = 12;
+const int MOTOR_ON_SWITCH_PIN = 19;  // New manual switch to turn motor on
 const int MOTOR_RELAY_PIN = 13;
 const int BUZZER_PIN = 14;
 const int LED_PIN = 15;
 
-// SR04M-2 Serial Communication
-HardwareSerial ultrasonicSerial(1); // Use UART1 for SR04M-2
+// HC-SR04 Ultrasonic Sensor Pins
+#define TRIGPIN 5
+#define ECHOPIN 18
 
 // Tank Configuration
 const float TANK_HEIGHT_CM = 100.0;  // Height of sump tank in cm
@@ -88,97 +89,39 @@ bool autoModeEnabled = true; // Start with auto mode enabled by default
 float ultrasonicLevel = 0.0;
 bool floatSwitchState = false;
 float combinedLevel = 0.0;
+float duration = 0.0;
+float distance = 0.0;
 
-// Test SR04M-2 UART communication
-void testSR04M2Communication() {
-  Serial.println("\n🔧 Testing SR04M-2 UART Communication...");
-  
-  // Check if UART is initialized
-  Serial.print("UART initialized: ");
-  Serial.println(ultrasonicSerial ? "YES" : "NO");
-  
-  // Clear any pending data
-  int cleared = 0;
-  while (ultrasonicSerial.available()) {
-    ultrasonicSerial.read();
-    cleared++;
+// Test HC-SR04 ultrasonic sensor
+void testHC_SR04Communication() {
+  Serial.println("\n🔧 Testing HC-SR04 Ultrasonic Sensor...");
+
+  // Test multiple readings
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(TRIGPIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIGPIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGPIN, LOW);
+
+    duration = pulseIn(ECHOPIN, HIGH, 30000); // 30ms timeout
+    distance = (duration * 0.0343) / 2;
+
+    Serial.print("📏 Test ");
+    Serial.print(i + 1);
+    Serial.print(": Distance = ");
+    Serial.print(distance);
+    Serial.println(" cm");
+
+    delay(500); // Wait 500ms between tests
   }
-  if (cleared > 0) {
-    Serial.print("🧹 Cleared ");
-    Serial.print(cleared);
-    Serial.println(" pending bytes");
-  }
-  
-  // Test different baud rates
-  int baudRates[] = {9600, 115200, 57600, 38400, 19200, 4800};
-  bool foundWorkingBaud = false;
-  
-  for (int i = 0; i < 6; i++) {
-    Serial.print("\n📤 Testing baud rate: ");
-    Serial.println(baudRates[i]);
-    
-  ultrasonicSerial.begin(baudRates[i], SERIAL_8N1, RX_PIN, TX_PIN);
-  Serial.println("Sent measurement command (0x55)");
-    
-    delay(200); // Wait for response
-    
-    int availableBytes = ultrasonicSerial.available();
-    Serial.print("📥 Available bytes: ");
-    Serial.println(availableBytes);
-    
-    if (availableBytes >= 2) {
-      byte data[2];
-      ultrasonicSerial.readBytes(data, 2);
-      
-      Serial.print("📖 Bytes read: 2 | Data: ");
-      for (int j = 0; j < 2; j++) {
-        Serial.print("0x");
-        if (data[j] < 16) Serial.print("0");
-        Serial.print(data[j], HEX);
-        if (j < 1) Serial.print(" ");
-      }
-      Serial.println();
-      
-      // Check if we got a valid response
-      if (data[0] != 0x00 && data[1] != 0x00) {
-        Serial.print("✅ Got non-zero response at baud rate ");
-        Serial.println(baudRates[i]);
-        foundWorkingBaud = true;
-        
-        // Calculate distance (2 bytes: high + low = distance in mm)
-        uint16_t distance = (data[0] << 8) | data[1];
-        Serial.print("📏 Distance: ");
-        Serial.print(distance);
-        Serial.println(" mm");
-        break;
-      }
-    } else if (availableBytes > 0) {
-      Serial.print("� Partial data: ");
-      for (int j = 0; j < availableBytes; j++) {
-        byte byteData = ultrasonicSerial.read();
-        Serial.print("0x");
-        if (byteData < 16) Serial.print("0");
-        Serial.print(byteData, HEX);
-        Serial.print(" ");
-      }
-      Serial.println();
-    } else {
-      Serial.println("❌ No response");
-    }
-  }
-  
-  // Reset to default baud rate
-  ultrasonicSerial.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
-  
-  if (!foundWorkingBaud) {
-    Serial.println("\n❌ No valid response from ultrasonic sensor at any baud rate");
-    Serial.println("🔧 Troubleshooting:");
-    Serial.println("1. Check wiring: ESP32 TX→SR04M-2 RX, ESP32 RX→SR04M-2 TX");
-    Serial.println("2. Verify 5V power supply to sensor");
-    Serial.println("3. Confirm sensor model (should be SR04M-2 UART)");
-    Serial.println("4. Try swapping RX/TX wires");
-    Serial.println("5. Check for loose connections");
-  }
+
+  Serial.println("✅ HC-SR04 test completed");
+  Serial.println("💡 If readings are 0.00 or inconsistent:");
+  Serial.println("   1. Check wiring: TRIG→GPIO 5, ECHO→GPIO 18");
+  Serial.println("   2. Verify 5V power supply to sensor");
+  Serial.println("   3. Ensure sensor is not obstructed");
+  Serial.println("   4. Check for loose connections");
 }
 
 void testHardware() {
@@ -200,6 +143,14 @@ void testHardware() {
   pinMode(MANUAL_BUTTON_PIN, INPUT_PULLUP);
   bool buttonState = digitalRead(MANUAL_BUTTON_PIN);
   Serial.println(buttonState ? "HIGH (Not pressed)" : "LOW (Pressed)");
+
+  // Test Motor On Switch
+  Serial.print("🔘 Motor On Switch (GPIO ");
+  Serial.print(MOTOR_ON_SWITCH_PIN);
+  Serial.print("): ");
+  pinMode(MOTOR_ON_SWITCH_PIN, INPUT_PULLUP);
+  bool motorOnSwitchState = digitalRead(MOTOR_ON_SWITCH_PIN);
+  Serial.println(motorOnSwitchState ? "HIGH (Not pressed)" : "LOW (Pressed)");
 
   // Test Motor Relay - COMMENT OUT THIS SECTION IF YOU DON'T WANT RELAY TESTING
   /*
@@ -249,101 +200,24 @@ float calculateVolume(float levelPercent) {
   return volume;
 }
 
-// Read SR04M-2 ultrasonic sensor via UART
+// Read HC-SR04 ultrasonic sensor via TRIG/ECHO pins
 float readUltrasonicLevel() {
-  // Clear any pending data first
-  while (ultrasonicSerial.available()) {
-    ultrasonicSerial.read();
-  }
+  digitalWrite(TRIGPIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIGPIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGPIN, LOW);
 
-  // Send measurement command to SR04M-2
-  ultrasonicSerial.write(0x55); // SR04M-2 measurement command
-  Serial.println("📤 Sent ultrasonic command (0x55)");
+  duration = pulseIn(ECHOPIN, HIGH);
+  distance = (duration * 0.0343) / 2;
 
-  // Wait for response with timeout
-  unsigned long startTime = millis();
-  while (!ultrasonicSerial.available() && (millis() - startTime) < 200) {
-    delay(1);
-  }
+  Serial.print("distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
 
-  if (!ultrasonicSerial.available()) {
-    Serial.println("❌ No response from SR04M-2 sensor");
-    return -1; // No response from sensor
-  }
-
-  // Read response (9 bytes for SR04M-2)
-  byte buffer[9];
-  int bytesRead = ultrasonicSerial.readBytes(buffer, 9);
-
-  Serial.print("📥 Received ");
-  Serial.print(bytesRead);
-  Serial.print(" bytes: ");
-  for (int i = 0; i < bytesRead; i++) {
-    Serial.print("0x");
-    if (buffer[i] < 16) Serial.print("0");
-    Serial.print(buffer[i], HEX);
-    Serial.print(" ");
-  }
-  Serial.println();
-
-  if (bytesRead != 9) {
-    Serial.println("❌ Incomplete response from SR04M-2");
-    return -1; // Incomplete response
-  }
-
-  // Check for all zeros (common issue)
-  bool allZeros = true;
-  for (int i = 0; i < 9; i++) {
-    if (buffer[i] != 0x00) {
-      allZeros = false;
-      break;
-    }
-  }
-  
-  if (allZeros) {
-    Serial.println("❌ All zeros received - check sensor wiring and power");
-    return -1;
-  }
-
-  // Validate response header - SR04M-2 should return 0xFF
-  if (buffer[0] != 0xFF) {
-    Serial.print("❌ Invalid header: 0x");
-    Serial.print(buffer[0], HEX);
-    Serial.println(" (expected 0xFF for SR04M-2)");
-    Serial.println("💡 Try: 'swap' command to test RX/TX wiring");
-    return -1; // Invalid header
-  }
-
-  // Calculate distance from SR04M-2 response
-  // SR04M-2 sends distance in mm (High byte + Low byte)
-  int distance_mm = (buffer[1] << 8) + buffer[2];
-  float distance_cm = distance_mm / 10.0;
-
-  Serial.print("📏 Raw distance: ");
-  Serial.print(distance_mm);
-  Serial.print("mm (");
-  Serial.print(distance_cm);
-  Serial.println("cm)");
-
-  // SR04M-2 minimum detection distance is 25cm
-  if (distance_cm < 25.0) {
-    Serial.println("❌ Distance too close for SR04M-2");
-    return -1; // Too close for SR04M-2
-  }
-
-  // SR04M-2 maximum detection distance is 400cm
-  if (distance_cm > 400.0) {
-    Serial.println("❌ Distance too far for SR04M-2");
-    return -1; // Too far for SR04M-2
-  }
-
-  float waterHeight = TANK_HEIGHT_CM - distance_cm;
+  // Calculate water level percentage
+  float waterHeight = TANK_HEIGHT_CM - distance;
   float levelPercent = (waterHeight / TANK_HEIGHT_CM) * 100.0;
-
-  Serial.print("✅ Valid reading: ");
-  Serial.print(levelPercent, 1);
-  Serial.println("%");
-
   return constrain(levelPercent, 0, 100);
 }
 
@@ -438,6 +312,35 @@ void checkManualButton() {
     }
   }
   lastButtonState = buttonState;
+}
+
+// Check motor on switch
+void checkMotorOnSwitch() {
+  static bool lastSwitchState = HIGH;
+  static unsigned long lastDebounceTime = 0;
+  const unsigned long debounceDelay = 200; // 200ms debounce
+
+  bool switchState = digitalRead(MOTOR_ON_SWITCH_PIN);
+
+  // Only process if enough time has passed since last change
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (switchState == LOW && lastSwitchState == HIGH) {
+      // Switch pressed (LOW to HIGH transition)
+      Serial.println("🔘 Motor On Switch pressed - attempting to start motor");
+
+      // SAFETY CHECK: Don't start motor if no water in sump
+      if (!floatSwitchState) {
+        Serial.println("🚫 SAFETY: Cannot start motor - No water detected in sump tank!");
+        return;
+      }
+
+      // Start motor regardless of auto/manual mode
+      Serial.println("🔄 Starting motor via manual switch");
+      controlMotor(true);
+      lastDebounceTime = millis();
+    }
+  }
+  lastSwitchState = switchState;
 }
 
 // Automatic motor control logic
@@ -665,22 +568,20 @@ void connectToWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\n=== Aqua Guard Sense ESP32 Sump Tank Starting ===");
-  Serial.println("Sensor: SR04M-2 Ultrasonic Sensor (UART)");
-  Serial.println("⚠️  IMPORTANT: Connect SR04M-2 to UART pins!");
-  Serial.println("   ESP32 TX (GPIO 17) → SR04M-2 RX");
-  Serial.println("   ESP32 RX (GPIO 16) → SR04M-2 TX");
+  Serial.println("Sensor: HC-SR04 Ultrasonic Sensor (TRIG/ECHO)");
+  Serial.println("⚠️  IMPORTANT: Connect HC-SR04 to digital pins!");
+  Serial.println("   HC-SR04 TRIG → ESP32 GPIO 5");
+  Serial.println("   HC-SR04 ECHO → ESP32 GPIO 18");
   Serial.println("🔄 Auto Mode: ENABLED by default");
-  Serial.println("   - Press manual button to disable auto mode and enable manual control");
+  Serial.println("   - Press manual button (GPIO 12) to disable auto mode and enable manual control");
+  Serial.println("   - Press motor on switch (GPIO 19) to start motor manually");
   Serial.println("   - Use UI to toggle auto mode on/off");
   Serial.println("   - Use 'Reset Manual' to re-enable auto mode");
 
-  // Initialize SR04M-2 UART communication
-  ultrasonicSerial.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
-  Serial.println("SR04M-2 UART initialized at 9600 baud");
-  
-  // Test SR04M-2 communication
-  delay(1000); // Wait for sensor to initialize
-  testSR04M2Communication();
+  // Initialize HC-SR04 pins
+  pinMode(TRIGPIN, OUTPUT);
+  pinMode(ECHOPIN, INPUT);
+  Serial.println("HC-SR04 initialized (TRIG/ECHO mode)");
 
   // Test all hardware components
   testHardware();
@@ -688,6 +589,7 @@ void setup() {
   // Initialize other pins
   pinMode(FLOAT_SWITCH_PIN, INPUT_PULLUP);
   pinMode(MANUAL_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(MOTOR_ON_SWITCH_PIN, INPUT_PULLUP);  // Initialize motor on switch
   pinMode(MOTOR_RELAY_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
@@ -731,30 +633,9 @@ void loop() {
     command.trim();
 
     if (command == "test") {
-      testSR04M2Communication();
+      testHC_SR04Communication();
     } else if (command == "hardware") {
       testHardware();
-    } else if (command == "swap") {
-      Serial.println("🔄 Testing with RX/TX swapped...");
-      ultrasonicSerial.begin(9600, SERIAL_8N1, TX_PIN, RX_PIN); // Swap RX/TX
-      delay(100);
-      ultrasonicSerial.write(0x55);
-      delay(200);
-      int availableBytes = ultrasonicSerial.available();
-      Serial.print("📥 Available bytes with swapped wiring: ");
-      Serial.println(availableBytes);
-      if (availableBytes >= 2) {
-        byte data[2];
-        ultrasonicSerial.readBytes(data, 2);
-        Serial.print("📖 Data: 0x");
-        if (data[0] < 16) Serial.print("0");
-        Serial.print(data[0], HEX);
-        Serial.print(" 0x");
-        if (data[1] < 16) Serial.print("0");
-        Serial.println(data[1], HEX);
-      }
-      ultrasonicSerial.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN); // Restore original
-      Serial.println("🔄 Restored original wiring");
     } else if (command == "status") {
       Serial.println("\n📊 SYSTEM STATUS");
       Serial.println("===============");
@@ -778,6 +659,9 @@ void loop() {
   // Check manual button
   checkManualButton();
 
+  // Check motor on switch
+  checkMotorOnSwitch();
+
   // Read sensors periodically
   if (millis() - lastSensorRead > 2000) { // Every 2 seconds
     combinedLevel = getCombinedLevel();
@@ -792,7 +676,7 @@ void loop() {
       Serial.print("% | Float: ");
       Serial.println(floatSwitchState ? "ON" : "OFF");
     } else {
-      Serial.println("❌ SR04M-2 Ultrasonic sensor error (UART)");
+      Serial.println("❌ HC-SR04 Ultrasonic sensor error (TRIG/ECHO)");
     }
   }
 

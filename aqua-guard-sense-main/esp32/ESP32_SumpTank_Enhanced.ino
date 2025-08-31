@@ -9,7 +9,7 @@
  *
  * Features:
  * - WiFi connectivity with WebSocket communication
- * - HC-SR04 Ultrasonic sensor for water level measurement (TRIG/ECHO)
+ * - AJ-SR04M Ultrasonic sensor for water level measurement (TRIG/ECHO)
  * - Float switch for dual-sensor verification
  * - Motor control with safety features
  * - Manual override button
@@ -18,17 +18,20 @@
  *
  * Hardware Requirements:
  * - ESP32 Dev Board
- * - HC-SR04 Ultrasonic Sensor (TRIG/ECHO mode)
- * - Wiring: HC-SR04 TRIG → ESP32 GPIO 5
- *          HC-SR04 ECHO → ESP32 GPIO 18
- *          HC-SR04 GND → ESP32 GND
- *          HC-SR04 VCC → ESP32 5V
+ * - AJ-SR04M Ultrasonic Sensor (TRIG/ECHO mode)
+ * - Wiring: AJ-SR04M TRIG → ESP32 GPIO 5
+ *          AJ-SR04M ECHO → ESP32 GPIO 18
+ *          AJ-SR04M GND → ESP32 GND
+ *          AJ-SR04M VCC → ESP32 5V
  * - Float Switch (GPIO 4)
  * - Manual Button (GPIO 12) - Toggles auto/manual mode
  * - Motor On Switch (GPIO 19) - Directly starts motor
  * - Relay Module for motor (GPIO 13)
  * - Buzzer (GPIO 14) - Optional
  * - LED (GPIO 15) - Optional
+ *
+ * IMPORTANT: AJ-SR04M cannot reliably detect distances below 20cm
+ * Readings closer than 20cm will be inaccurate/wrong
  */
 
 // ========== CONFIGURATION SECTION ==========
@@ -53,7 +56,7 @@ const int MOTOR_RELAY_PIN = 13;
 const int BUZZER_PIN = 14;
 const int LED_PIN = 15;
 
-// HC-SR04 Ultrasonic Sensor Pins
+// AJ-SR04M Ultrasonic Sensor Pins
 #define TRIGPIN 5
 #define ECHOPIN 18
 
@@ -62,6 +65,10 @@ const float TANK_HEIGHT_CM = 100.0;  // Height of sump tank in cm
 const float TANK_DIAMETER_CM = 80.0; // Diameter of sump tank in cm
 const float MIN_LEVEL_PERCENT = 20.0; // Minimum water level percentage
 const float MAX_LEVEL_PERCENT = 85.0; // Maximum water level percentage
+
+// AJ-SR04M Sensor Configuration
+const float MIN_SENSOR_DISTANCE_CM = 20.0;  // Minimum reliable detection distance (sensor limitation)
+const float MAX_SENSOR_DISTANCE_CM = 450.0; // Maximum detection distance
 
 // Motor Control Configuration
 const unsigned long MOTOR_MAX_RUNTIME = 1800000; // 30 minutes max
@@ -87,14 +94,14 @@ bool autoModeEnabled = true; // Start with auto mode enabled by default
 
 // Sensor readings
 float ultrasonicLevel = 0.0;
-bool floatSwitchState = false;
+bool floatSwitchState = false;x
 float combinedLevel = 0.0;
 float duration = 0.0;
 float distance = 0.0;
 
-// Test HC-SR04 ultrasonic sensor
-void testHC_SR04Communication() {
-  Serial.println("\n🔧 Testing HC-SR04 Ultrasonic Sensor...");
+// Test AJ-SR04M ultrasonic sensor
+void testAJ_SR04MCommunication() {
+  Serial.println("🔧 Testing AJ-SR04M Ultrasonic Sensor...");
 
   // Test multiple readings
   for (int i = 0; i < 5; i++) {
@@ -116,12 +123,17 @@ void testHC_SR04Communication() {
     delay(500); // Wait 500ms between tests
   }
 
-  Serial.println("✅ HC-SR04 test completed");
+  Serial.println("✅ AJ-SR04M test completed");
+  Serial.println("💡 Sensor Specifications:");
+  Serial.println("   • Minimum detection distance: 20 cm (IMPORTANT LIMITATION)");
+  Serial.println("   • Maximum detection distance: 450 cm");
+  Serial.println("   • WARNING: Readings below 20cm will be inaccurate");
   Serial.println("💡 If readings are 0.00 or inconsistent:");
   Serial.println("   1. Check wiring: TRIG→GPIO 5, ECHO→GPIO 18");
   Serial.println("   2. Verify 5V power supply to sensor");
   Serial.println("   3. Ensure sensor is not obstructed");
   Serial.println("   4. Check for loose connections");
+  Serial.println("   5. NOTE: Sensor cannot reliably detect < 20cm");
 }
 
 void testHardware() {
@@ -200,7 +212,7 @@ float calculateVolume(float levelPercent) {
   return volume;
 }
 
-// Read HC-SR04 ultrasonic sensor via TRIG/ECHO pins
+// Read AJ-SR04M ultrasonic sensor via TRIG/ECHO pins
 float readUltrasonicLevel() {
   digitalWrite(TRIGPIN, LOW);
   delayMicroseconds(2);
@@ -208,17 +220,31 @@ float readUltrasonicLevel() {
   delayMicroseconds(10);
   digitalWrite(TRIGPIN, LOW);
 
-  duration = pulseIn(ECHOPIN, HIGH);
+  duration = pulseIn(ECHOPIN, HIGH, 30000); // 30ms timeout
   distance = (duration * 0.0343) / 2;
 
-  Serial.print("distance: ");
+  Serial.print("Raw distance: ");
   Serial.print(distance);
   Serial.println(" cm");
+
+  // Validate sensor reading
+  if (distance < MIN_SENSOR_DISTANCE_CM || distance > MAX_SENSOR_DISTANCE_CM || distance == 0) {
+    Serial.println("⚠️ Invalid sensor reading - distance out of range or < 20cm");
+    return -1; // Invalid reading
+  }
 
   // Calculate water level percentage
   float waterHeight = TANK_HEIGHT_CM - distance;
   float levelPercent = (waterHeight / TANK_HEIGHT_CM) * 100.0;
-  return constrain(levelPercent, 0, 100);
+
+  // Ensure level is within valid range
+  levelPercent = constrain(levelPercent, 0, 100);
+
+  Serial.print("Calculated level: ");
+  Serial.print(levelPercent, 1);
+  Serial.println("%");
+
+  return levelPercent;
 }
 
 // Read float switch
@@ -568,20 +594,22 @@ void connectToWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\n=== Aqua Guard Sense ESP32 Sump Tank Starting ===");
-  Serial.println("Sensor: HC-SR04 Ultrasonic Sensor (TRIG/ECHO)");
-  Serial.println("⚠️  IMPORTANT: Connect HC-SR04 to digital pins!");
-  Serial.println("   HC-SR04 TRIG → ESP32 GPIO 5");
-  Serial.println("   HC-SR04 ECHO → ESP32 GPIO 18");
+  Serial.println("Sensor: AJ-SR04M Ultrasonic Sensor (TRIG/ECHO)");
+  Serial.println("⚠️  IMPORTANT: Connect AJ-SR04M to digital pins!");
+  Serial.println("   AJ-SR04M TRIG → ESP32 GPIO 5");
+  Serial.println("   AJ-SR04M ECHO → ESP32 GPIO 18");
+  Serial.println("⚠️  CRITICAL: Sensor CANNOT detect below 20cm - readings will be wrong!");
+  Serial.println("   This is a hardware limitation of the AJ-SR04M sensor");
   Serial.println("🔄 Auto Mode: ENABLED by default");
   Serial.println("   - Press manual button (GPIO 12) to disable auto mode and enable manual control");
   Serial.println("   - Press motor on switch (GPIO 19) to start motor manually");
   Serial.println("   - Use UI to toggle auto mode on/off");
   Serial.println("   - Use 'Reset Manual' to re-enable auto mode");
 
-  // Initialize HC-SR04 pins
+  // Initialize AJ-SR04M pins
   pinMode(TRIGPIN, OUTPUT);
   pinMode(ECHOPIN, INPUT);
-  Serial.println("HC-SR04 initialized (TRIG/ECHO mode)");
+  Serial.println("AJ-SR04M initialized (TRIG/ECHO mode)");
 
   // Test all hardware components
   testHardware();
@@ -633,7 +661,7 @@ void loop() {
     command.trim();
 
     if (command == "test") {
-      testHC_SR04Communication();
+      testAJ_SR04MCommunication();
     } else if (command == "hardware") {
       testHardware();
     } else if (command == "status") {
@@ -675,8 +703,14 @@ void loop() {
       Serial.print(ultrasonicLevel, 1);
       Serial.print("% | Float: ");
       Serial.println(floatSwitchState ? "ON" : "OFF");
+
+      // Warning for high water levels (sensor cannot detect < 20cm)
+      if (ultrasonicLevel > 80) {
+        Serial.println("⚠️ CRITICAL: High water level - sensor cannot detect < 20cm!");
+        Serial.println("   Readings will be WRONG when water is very close to sensor");
+      }
     } else {
-      Serial.println("❌ HC-SR04 Ultrasonic sensor error (TRIG/ECHO)");
+      Serial.println("❌ AJ-SR04M Ultrasonic sensor error (TRIG/ECHO)");
     }
   }
 

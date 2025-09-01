@@ -1,5 +1,15 @@
 
-const API_BASE_URL = `${import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'}/api`;
+import { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'your-supabase-url'
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-supabase-anon-key'
+
+const supabase = createClient(supabaseUrl, supabaseKey)
+
+// WebSocket connection for real-time updates
+const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || 'wss://your-project.supabase.co/functions/v1/websocket'
+let wsConnection: WebSocket | null = null
+const wsCallbacks: Map<string, (data: any) => void> = new Map()
 
 export interface TankReading {
   id: number;
@@ -43,10 +53,65 @@ export interface ConsumptionData {
 
 class ApiService {
   private requestQueue: Map<string, Promise<any>> = new Map();
-  
+
+  constructor() {
+    this.initializeWebSocket()
+  }
+
+  private initializeWebSocket() {
+    try {
+      wsConnection = new WebSocket(WS_URL)
+
+      wsConnection.onopen = () => {
+        console.log('WebSocket connected to Supabase')
+      }
+
+      wsConnection.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data)
+          console.log('WebSocket message received:', message.type)
+
+          // Call registered callbacks
+          const callback = wsCallbacks.get(message.type)
+          if (callback) {
+            callback(message.data)
+          }
+        } catch (error) {
+          console.error('Error processing WebSocket message:', error)
+        }
+      }
+
+      wsConnection.onclose = () => {
+        console.log('WebSocket disconnected')
+        // Attempt to reconnect after 5 seconds
+        setTimeout(() => this.initializeWebSocket(), 5000)
+      }
+
+      wsConnection.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+    } catch (error) {
+      console.error('Failed to initialize WebSocket:', error)
+    }
+  }
+
+  // Register callback for WebSocket messages
+  onWebSocketMessage(type: string, callback: (data: any) => void) {
+    wsCallbacks.set(type, callback)
+  }
+
+  // Send WebSocket message
+  private sendWebSocketMessage(message: any) {
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+      wsConnection.send(JSON.stringify(message))
+    } else {
+      console.warn('WebSocket not connected, message not sent:', message)
+    }
+  }
+
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const cacheKey = `${options?.method || 'GET'}_${endpoint}`;
-    
+
     // If we already have a request in progress for this endpoint, return it
     if (this.requestQueue.has(cacheKey)) {
       return this.requestQueue.get(cacheKey)!;
@@ -67,86 +132,274 @@ class ApiService {
   }
   
   private async makeRequest<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-    
+    // Use Supabase functions instead of direct API calls
+    const functionName = endpoint.replace('/', '')
+    const { data, error } = await supabase.functions.invoke(`api/${functionName}`, {
+      method: options?.method || 'GET',
+      body: options?.body,
+      headers: options?.headers
+    })
+
+    if (error) {
+      throw new Error(`Supabase function error: ${error.message}`)
+    }
+
+    return data as T
+  }
+
+  // Tank data methods
+  async getTanks(): Promise<TankReading[]> {
     try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options?.headers,
-        },
-        signal: controller.signal,
-      });
+      const { data, error } = await supabase
+        .from('tank_readings')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(10)
 
-      clearTimeout(timeoutId);
+      if (error) throw error
 
-      if (!response.ok) {
-        throw new Error(`API request failed: ${response.statusText}`);
-      }
+      // Group by tank type and get latest reading
+      const tanks: { [key: string]: TankReading } = {}
+      data.forEach((reading: any) => {
+        if (!tanks[reading.tank_type]) {
+          tanks[reading.tank_type] = reading
+        }
+      })
 
-      return response.json();
+      return Object.values(tanks)
     } catch (error) {
-      clearTimeout(timeoutId);
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('Request timeout');
-      }
-      throw error;
+      console.error('Error fetching tanks:', error)
+      return []
     }
   }
 
-  // Tank methods
-  async getTanks(): Promise<TankReading[]> {
-    return this.request<TankReading[]>('/tanks');
-  }
-
   async addTankReading(reading: Omit<TankReading, 'id' | 'timestamp'>): Promise<TankReading> {
-    return this.request<TankReading>('/tanks/reading', {
-      method: 'POST',
-      body: JSON.stringify(reading),
-    });
+    try {
+      const { data, error } = await supabase
+        .from('tank_readings')
+        .insert([reading])
+        .select()
+
+      if (error) throw error
+      return data[0]
+    } catch (error) {
+      console.error('Error adding tank reading:', error)
+      throw error
+    }
   }
 
   // Motor methods
   async controlMotor(action: 'start' | 'stop'): Promise<{ success: boolean; event: MotorEvent }> {
-    return this.request<{ success: boolean; event: MotorEvent }>('/motor/control', {
-      method: 'POST',
-      body: JSON.stringify({ action }),
-    });
+    try {
+      const { data, error } = await supabase
+        .from('motor_events')
+        .insert([{
+          event_type: action === 'start' ? 'motor_started' : 'motor_stopped',
+          timestamp: new Date().toISOString()
+        }])
+        .select()
+
+      if (error) throw error
+
+      return {
+        success: true,
+        event: data[0]
+      }
+    } catch (error) {
+      console.error('Error controlling motor:', error)
+      throw error
+    }
   }
 
   async getMotorEvents(): Promise<MotorEvent[]> {
-    return this.request<MotorEvent[]>('/motor/events');
+    try {
+      const { data, error } = await supabase
+        .from('motor_events')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(50)
+
+      if (error) throw error
+      return data || []
+    } catch (error) {
+      console.error('Error fetching motor events:', error)
+      return []
+    }
   }
 
   // Alert methods
   async getAlerts(): Promise<SystemAlert[]> {
-    return this.request<SystemAlert[]>('/alerts');
+    try {
+      const { data, error } = await supabase
+        .from('alerts')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(50)
+
+      if (error) throw error
+      return data || []
+    } catch (error) {
+      console.error('Error fetching alerts:', error)
+      return []
+    }
   }
 
   async addAlert(alert: Omit<SystemAlert, 'id' | 'resolved' | 'timestamp'>): Promise<SystemAlert> {
-    return this.request<SystemAlert>('/alerts', {
-      method: 'POST',
-      body: JSON.stringify(alert),
-    });
+    try {
+      const { data, error } = await supabase
+        .from('alerts')
+        .insert([{
+          ...alert,
+          resolved: false,
+          timestamp: new Date().toISOString()
+        }])
+        .select()
+
+      if (error) throw error
+      return data[0]
+    } catch (error) {
+      console.error('Error adding alert:', error)
+      throw error
+    }
   }
 
   // System status methods
   async getSystemStatus(): Promise<SystemStatus> {
-    return this.request<SystemStatus>('/system/status');
+    try {
+      const { data, error } = await supabase
+        .from('system_status')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(1)
+
+      if (error) throw error
+
+      return data[0] || {
+        id: 0,
+        wifi_connected: true,
+        battery_level: 100,
+        temperature: 25,
+        esp32_top_status: 'offline',
+        esp32_sump_status: 'offline',
+        timestamp: new Date().toISOString()
+      }
+    } catch (error) {
+      console.error('Error fetching system status:', error)
+      return {
+        id: 0,
+        wifi_connected: true,
+        battery_level: 100,
+        temperature: 25,
+        esp32_top_status: 'offline',
+        esp32_sump_status: 'offline',
+        timestamp: new Date().toISOString()
+      }
+    }
   }
 
   async updateSystemStatus(status: Omit<SystemStatus, 'id' | 'timestamp'>): Promise<SystemStatus> {
-    return this.request<SystemStatus>('/system/status', {
-      method: 'POST',
-      body: JSON.stringify(status),
-    });
+    try {
+      const { data, error } = await supabase
+        .from('system_status')
+        .insert([{
+          ...status,
+          timestamp: new Date().toISOString()
+        }])
+        .select()
+
+      if (error) throw error
+      return data[0]
+    } catch (error) {
+      console.error('Error updating system status:', error)
+      throw error
+    }
   }
 
   // Consumption data
   async getConsumptionData(period: 'daily' | 'monthly' = 'daily'): Promise<ConsumptionData[]> {
-    return this.request<ConsumptionData[]>(`/consumption?period=${period}`);
+    try {
+      let query = supabase
+        .from('tank_readings')
+        .select('timestamp, level_liters, tank_type')
+
+      if (period === 'daily') {
+        const yesterday = new Date()
+        yesterday.setDate(yesterday.getDate() - 1)
+        query = query.gte('timestamp', yesterday.toISOString())
+      } else {
+        const lastMonth = new Date()
+        lastMonth.setDate(lastMonth.getDate() - 30)
+        query = query.gte('timestamp', lastMonth.toISOString())
+      }
+
+      const { data, error } = await query
+        .order('timestamp', { ascending: true })
+
+      if (error) throw error
+
+      // Process data for consumption calculation
+      const consumptionData: ConsumptionData[] = []
+      const dailyMap = new Map<string, any[]>()
+
+      data.forEach((reading: any) => {
+        const date = new Date(reading.timestamp).toDateString()
+        if (!dailyMap.has(date)) {
+          dailyMap.set(date, [])
+        }
+        dailyMap.get(date)!.push(reading)
+      })
+
+      dailyMap.forEach((readings, date) => {
+        if (readings.length > 1) {
+          const first = readings[0]
+          const last = readings[readings.length - 1]
+          const consumption = Math.max(0, first.level_liters - last.level_liters)
+          consumptionData.push({
+            date,
+            consumption,
+            fills: 0, // You can calculate this based on motor events
+            motorStarts: 0 // You can calculate this based on motor events
+          })
+        }
+      })
+
+      return consumptionData
+    } catch (error) {
+      console.error('Error fetching consumption data:', error)
+      return []
+    }
+  }
+
+  // WebSocket methods for ESP32 communication
+  sendESP32Command(esp32Id: string, command: string, data?: any) {
+    this.sendWebSocketMessage({
+      type: command,
+      esp32_id: esp32Id,
+      ...data
+    })
+  }
+
+  registerESP32(esp32Id: string, deviceType: string) {
+    this.sendWebSocketMessage({
+      type: 'esp32_register',
+      esp32_id: esp32Id,
+      device_type: deviceType,
+      firmware_version: '1.0.0'
+    })
+  }
+
+  sendSensorData(sensorData: any) {
+    this.sendWebSocketMessage({
+      type: 'sensor_data',
+      payload: sensorData
+    })
+  }
+
+  sendMotorStatus(motorData: any) {
+    this.sendWebSocketMessage({
+      type: 'motor_status',
+      payload: motorData
+    })
   }
 }
 

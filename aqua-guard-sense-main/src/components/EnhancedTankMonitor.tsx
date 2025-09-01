@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Droplets, AlertTriangle, CheckCircle, Wifi, Battery, Zap, Settings } from "lucide-react";
+import { Droplets, AlertTriangle, CheckCircle, Wifi, Zap, Settings } from "lucide-react";
 import { useState } from "react";
 
 interface EnhancedTankMonitorProps {
@@ -16,7 +16,6 @@ interface EnhancedTankMonitorProps {
   sensorHealth: 'online' | 'warning' | 'offline';
   esp32Status: {
     connected: boolean;
-    batteryLevel: number;
     wifiStrength: number;
     lastSeen: Date;
   };
@@ -24,6 +23,7 @@ interface EnhancedTankMonitorProps {
   floatSwitch?: boolean;
   motorRunning?: boolean;
   manualOverride?: boolean;
+  onRequestEsp32Connect?: (deviceName: string, onSuccess: () => void) => void;
 }
 
 export const EnhancedTankMonitor = ({ 
@@ -36,7 +36,8 @@ export const EnhancedTankMonitor = ({
   symbol,
   floatSwitch,
   motorRunning,
-  manualOverride
+  manualOverride,
+  onRequestEsp32Connect
 }: EnhancedTankMonitorProps) => {
   const [esp32Config, setEsp32Config] = useState({
     macAddress: '80:F3:DA:65:47:38',
@@ -73,12 +74,23 @@ export const EnhancedTankMonitor = ({
   };
 
   const handleConnectEsp32 = () => {
-    setIsConnecting(true);
-    // Simulate connection process
-    setTimeout(() => {
-      setIsConnecting(false);
-      console.log('ESP32 Connection attempt:', esp32Config);
-    }, 2000);
+    if (onRequestEsp32Connect) {
+      onRequestEsp32Connect(title, () => {
+        setIsConnecting(true);
+        // Simulate connection process
+        setTimeout(() => {
+          setIsConnecting(false);
+          console.log('ESP32 Connection attempt:', esp32Config);
+        }, 2000);
+      });
+    } else {
+      // Fallback for backward compatibility
+      setIsConnecting(true);
+      setTimeout(() => {
+        setIsConnecting(false);
+        console.log('ESP32 Connection attempt:', esp32Config);
+      }, 2000);
+    }
   };
 
   return (

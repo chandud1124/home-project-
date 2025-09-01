@@ -3,7 +3,6 @@ import { Badge } from "@/components/ui/badge";
 import { 
   Wifi, 
   WifiOff, 
-  Battery, 
   Thermometer, 
   Activity,
   Shield
@@ -11,7 +10,6 @@ import {
 
 interface SystemStatusProps {
   wifiConnected: boolean;
-  batteryLevel: number;
   temperature: number;
   uptime: string;
   esp32Status: {
@@ -23,7 +21,6 @@ interface SystemStatusProps {
 
 export const SystemStatus = ({ 
   wifiConnected, 
-  batteryLevel, 
   temperature,
   uptime,
   esp32Status,
@@ -59,23 +56,6 @@ export const SystemStatus = ({
           <Badge variant={wifiConnected ? 'default' : 'destructive'} className="text-xs">
             {wifiConnected ? 'Connected' : 'Disconnected'}
           </Badge>
-        </div>
-
-        {/* Battery Level - Mobile Optimized */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Battery className="w-3 h-3 sm:w-4 sm:h-4 text-muted-foreground" />
-            <span className="text-xs sm:text-sm">Battery Level</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-8 sm:w-12 h-2 bg-muted rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-success to-primary rounded-full transition-all duration-500"
-                style={{ width: `${batteryLevel}%` }}
-              />
-            </div>
-            <span className="text-xs sm:text-sm font-medium">{batteryLevel}%</span>
-          </div>
         </div>
 
         {/* Temperature */}

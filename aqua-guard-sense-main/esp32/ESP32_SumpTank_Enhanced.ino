@@ -28,7 +28,7 @@
  * - Motor On Switch (GPIO 19) - Directly starts motor
  * - Relay Module for motor (GPIO 13)
  * - Buzzer (GPIO 14) - Optional
- * - LED (GPIO 15) - Optional
+ * - LED (GPIO 15) - Motor running indicator (ON when motor is running)
  *
  * IMPORTANT: AJ-SR04M cannot reliably detect distances below 20cm
  * Readings closer than 20cm will be inaccurate/wrong
@@ -181,15 +181,15 @@ void testHardware() {
   Serial.println("   ✓ Relay toggled (check if motor responded - Active LOW: LOW=ON, HIGH=OFF)");
   */
 
-  // Test LED
+  // Test LED (Motor Running Indicator)
   Serial.print("💡 LED (GPIO ");
   Serial.print(LED_PIN);
-  Serial.println("): Testing...");
+  Serial.println("): Testing motor running indicator...");
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
   delay(500);
   digitalWrite(LED_PIN, LOW);
-  Serial.println("   ✓ LED blinked");
+  Serial.println("   ✓ Motor running indicator LED tested (HIGH = motor running, LOW = motor stopped)");
 
   // Test Buzzer
   Serial.print("🔊 Buzzer (GPIO ");
@@ -290,16 +290,16 @@ void controlMotor(bool state) {
       digitalWrite(MOTOR_RELAY_PIN, LOW);   // LOW = Relay ON for active LOW module
       motorRunning = true;
       motorStartTime = millis();
-      digitalWrite(LED_PIN, HIGH);
-      Serial.println("🔄 Motor STARTED");
+      digitalWrite(LED_PIN, HIGH);          // Turn ON motor running indicator LED
+      Serial.println("🔄 Motor STARTED - LED ON");
     }
   } else if (!state && motorRunning) {
     // Stop motor
     digitalWrite(MOTOR_RELAY_PIN, HIGH);  // HIGH = Relay OFF for active LOW module
     motorRunning = false;
     lastMotorStop = millis();
-    digitalWrite(LED_PIN, LOW);
-    Serial.println("⏹️ Motor STOPPED");
+    digitalWrite(LED_PIN, LOW);           // Turn OFF motor running indicator LED
+    Serial.println("⏹️ Motor STOPPED - LED OFF");
   }
 }
 
@@ -624,7 +624,7 @@ void setup() {
 
   // CRITICAL: Ensure motor is OFF at startup (Active LOW relay: HIGH = OFF)
   digitalWrite(MOTOR_RELAY_PIN, HIGH);  // HIGH = Relay OFF for active LOW module
-  digitalWrite(LED_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);           // Motor running indicator OFF
   digitalWrite(BUZZER_PIN, LOW);
 
   // Double-check relay is off after a short delay

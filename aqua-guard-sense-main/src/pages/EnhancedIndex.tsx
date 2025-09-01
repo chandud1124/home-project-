@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
+import { apiService } from "@/services/api";
 import { 
   Droplets, 
   Zap, 
@@ -56,7 +57,6 @@ interface SystemAlertMessage {
 
 interface SystemStatusMessage {
   wifi_connected: boolean;
-  battery_level: number;
   temperature: number;
   uptime: string;
   esp32_top_status: string;
@@ -91,7 +91,6 @@ interface ApiSystemAlert {
 interface SystemStatusType {
   id: number;
   wifi_connected: boolean;
-  battery_level: number;
   temperature: number;
   esp32_top_status: string;
   esp32_sump_status: string;
@@ -117,6 +116,15 @@ const EnhancedIndex = () => {
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatusType | null>(null);
   const [consumptionData, setConsumptionData] = useState<ConsumptionData[]>([]);
+
+  // Dashboard data state
+  const [totalWaterLevel, setTotalWaterLevel] = useState<number>(0);
+  const [waterLevelChange, setWaterLevelChange] = useState<number>(0);
+  const [motorStatus, setMotorStatus] = useState<string>('Stopped');
+  const [motorLastRun, setMotorLastRun] = useState<string>('Never');
+  const [dailyUsage, setDailyUsage] = useState<number>(0);
+  const [efficiency, setEfficiency] = useState<number>(0);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [hasFetchedInitialData, setHasFetchedInitialData] = useState(false);
   const [isFetchingData, setIsFetchingData] = useState(false);
@@ -126,6 +134,63 @@ const EnhancedIndex = () => {
   useEffect(() => {
     document.documentElement.classList.add('dark');
   }, []);
+
+  // Fetch dashboard data from API
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        setDashboardLoading(true);
+
+        // Fetch tank data for total water level
+        const tanks = await apiService.getTanks();
+        const totalLiters = tanks.reduce((sum, tank) => sum + tank.level_liters, 0);
+        setTotalWaterLevel(totalLiters);
+
+        // Calculate water level change (mock for now - would need historical data)
+        setWaterLevelChange(5.2); // This would be calculated from historical data
+
+        // Fetch consumption data for daily usage
+        const consumption = await apiService.getConsumptionData();
+        const todayConsumption = consumption.reduce((sum, day) => sum + day.consumption, 0);
+        setDailyUsage(todayConsumption);
+
+        // Calculate efficiency (mock calculation - would be based on actual metrics)
+        const sysStatus = await apiService.getSystemStatus();
+        // Simple efficiency calculation based on uptime and performance
+        const baseEfficiency = 85;
+        const wifiBonus = sysStatus.wifi_connected ? 5 : 0;
+        setEfficiency(baseEfficiency + wifiBonus);
+
+        // Set motor status based on system status
+        setMotorStatus('Stopped'); // This would come from motor events
+        setMotorLastRun('2h ago'); // This would be calculated from motor events
+
+      } catch (error) {
+        console.error('Failed to fetch dashboard data:', error);
+        toast({
+          title: "Data Fetch Error",
+          description: "Failed to load dashboard data. Using fallback values.",
+          variant: "destructive",
+        });
+
+        // Fallback values
+        setTotalWaterLevel(1245);
+        setWaterLevelChange(5);
+        setMotorStatus('Stopped');
+        setMotorLastRun('2h ago');
+        setDailyUsage(456);
+        setEfficiency(94);
+      } finally {
+        setDashboardLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+
+    // Refresh data every 30 seconds
+    const interval = setInterval(fetchDashboardData, 30000);
+    return () => clearInterval(interval);
+  }, [toast]);
 
   // API service functions
   const apiService = {
@@ -277,7 +342,6 @@ const EnhancedIndex = () => {
               const newSystemStatus = {
                 id: 1,
                 wifi_connected: statusData.wifi_connected,
-                battery_level: statusData.battery_level,
                 temperature: statusData.temperature,
                 esp32_top_status: statusData.esp32_top_status,
                 esp32_sump_status: statusData.esp32_sump_status,
@@ -466,7 +530,10 @@ const EnhancedIndex = () => {
   const sumpTankData = sumpTank || {
     level_percentage: 0,
     level_liters: 0,
-    tank_type: 'sump'
+    tank_type: 'sump',
+    float_switch: false, // Default to no water detected
+    motor_running: false, // Default to motor stopped
+    manual_override: false // Default to no manual override
   };
 
   // Determine ESP32 connection status based on recent activity
@@ -474,7 +541,6 @@ const EnhancedIndex = () => {
 
   const systemStatusData = systemStatus || {
     wifi_connected: isEsp32Connected,
-    battery_level: 85, // Default battery level
     temperature: 25,
     esp32_top_status: isEsp32Connected ? 'online' : 'offline',
     esp32_sump_status: 'offline', // Assuming only top tank for now
@@ -546,8 +612,19 @@ const EnhancedIndex = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-foreground">1,245L</div>
-              <p className="text-xs text-success mt-1">+5% from yesterday</p>
+              {dashboardLoading ? (
+                <div className="animate-pulse">
+                  <div className="h-8 bg-muted rounded mb-2"></div>
+                  <div className="h-4 bg-muted rounded w-3/4"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-2xl font-bold text-foreground">{totalWaterLevel.toLocaleString()}L</div>
+                  <p className={`text-xs mt-1 ${waterLevelChange >= 0 ? 'text-success' : 'text-destructive'}`}>
+                    {waterLevelChange >= 0 ? '+' : ''}{waterLevelChange.toFixed(1)}% from yesterday
+                  </p>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -559,12 +636,21 @@ const EnhancedIndex = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                {motorRunning ? 'Running' : 'Stopped'}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {motorRunning ? 'Active for 12 min' : 'Last run: 2h ago'}
-              </p>
+              {dashboardLoading ? (
+                <div className="animate-pulse">
+                  <div className="h-8 bg-muted rounded mb-2"></div>
+                  <div className="h-4 bg-muted rounded w-3/4"></div>
+                </div>
+              ) : (
+                <>
+                  <div className={`text-2xl font-bold ${motorStatus === 'Running' ? 'text-success' : 'text-foreground'}`}>
+                    {motorStatus}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {motorLastRun}
+                  </p>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -576,8 +662,17 @@ const EnhancedIndex = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-foreground">456L</div>
-              <p className="text-xs text-success mt-1">Within normal range</p>
+              {dashboardLoading ? (
+                <div className="animate-pulse">
+                  <div className="h-8 bg-muted rounded mb-2"></div>
+                  <div className="h-4 bg-muted rounded w-3/4"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-2xl font-bold text-foreground">{dailyUsage.toFixed(0)}L</div>
+                  <p className="text-xs text-success mt-1">Within normal range</p>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -589,8 +684,17 @@ const EnhancedIndex = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-foreground">94%</div>
-              <p className="text-xs text-success mt-1">Excellent performance</p>
+              {dashboardLoading ? (
+                <div className="animate-pulse">
+                  <div className="h-8 bg-muted rounded mb-2"></div>
+                  <div className="h-4 bg-muted rounded w-3/4"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-2xl font-bold text-foreground">{efficiency}%</div>
+                  <p className="text-xs text-success mt-1">Excellent performance</p>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -618,14 +722,10 @@ const EnhancedIndex = () => {
                 sensorHealth={systemStatusData.esp32_top_status === 'online' ? 'online' : 'offline'}
                 esp32Status={{
                   connected: isEsp32Connected,
-                  batteryLevel: systemStatusData.battery_level,
                   wifiStrength: topTank?.signal_strength || systemStatusData.wifi_strength || -50,
                   lastSeen: esp32LastSeen || new Date()
                 }}
                 symbol="🏠"
-                floatSwitch={topTank?.float_switch}
-                motorRunning={topTank?.motor_running}
-                manualOverride={topTank?.manual_override}
               />
             </Card>
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
@@ -639,14 +739,13 @@ const EnhancedIndex = () => {
                 sensorHealth={systemStatusData.esp32_sump_status === 'online' ? 'online' : 'offline'}
                 esp32Status={{
                   connected: systemStatusData.esp32_sump_status === 'online',
-                  batteryLevel: systemStatusData.battery_level,
                   wifiStrength: 82,
                   lastSeen: new Date()
                 }}
                 symbol="🕳️"
-                floatSwitch={sumpTank?.float_switch}
-                motorRunning={sumpTank?.motor_running}
-                manualOverride={sumpTank?.manual_override}
+                floatSwitch={sumpTankData.float_switch}
+                motorRunning={sumpTankData.motor_running}
+                manualOverride={sumpTankData.manual_override}
               />
             </Card>
           </div>
@@ -792,7 +891,6 @@ const EnhancedIndex = () => {
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
               <SystemStatus
                 wifiConnected={systemStatusData.wifi_connected}
-                batteryLevel={systemStatusData.battery_level}
                 temperature={systemStatusData.temperature}
                 uptime="2d 14h 32m"
                 esp32Status={{

@@ -47,7 +47,13 @@ interface ESP32Config {
   current_ip?: string;
 }
 
-export const ESP32Config = () => {
+export const ESP32Config = ({ 
+  onRequestEsp32Save,
+  onRequestEsp32Update 
+}: {
+  onRequestEsp32Save?: (deviceName: string, onSuccess: () => void) => void;
+  onRequestEsp32Update?: (deviceName: string, onSuccess: () => void) => void;
+} = {}) => {
   const { toast } = useToast();
   const [configs, setConfigs] = useState<ESP32Config[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,33 +122,41 @@ export const ESP32Config = () => {
   };
 
   const saveNewDevice = async (newConfig: ESP32Config) => {
-    try {
-      const response = await fetch('http://localhost:3001/api/esp32/devices', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(newConfig),
-      });
-      const data = await response.json();
-      if (data.success) {
-        setConfigs(prev => [...prev, { ...newConfig, _id: data.deviceId }]);
-        setEditingConfig(null);
-        setIsAddingDevice(false);
-        toast({
-          title: "Device Added",
-          description: `${newConfig.name} has been added successfully.`,
+    const performSave = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/api/esp32/devices', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(newConfig),
         });
-      } else {
-        throw new Error(data.error);
+        const data = await response.json();
+        if (data.success) {
+          setConfigs(prev => [...prev, { ...newConfig, _id: data.deviceId }]);
+          setEditingConfig(null);
+          setIsAddingDevice(false);
+          toast({
+            title: "Device Added",
+            description: `${newConfig.name} has been added successfully.`,
+          });
+        } else {
+          throw new Error(data.error);
+        }
+      } catch (error) {
+        console.error('Error saving device:', error);
+        toast({
+          title: "Error",
+          description: "Failed to save device configuration.",
+          variant: "destructive",
+        });
       }
-    } catch (error) {
-      console.error('Error saving device:', error);
-      toast({
-        title: "Error",
-        description: "Failed to save device configuration.",
-        variant: "destructive",
-      });
+    };
+
+    if (onRequestEsp32Save) {
+      onRequestEsp32Save(newConfig.name, performSave);
+    } else {
+      await performSave();
     }
   };
 
@@ -717,33 +731,41 @@ void performSafetyChecks(float level, bool floatStatus) {
   };
 
   const updateConfig = async (updatedConfig: ESP32Config) => {
-    try {
-      const deviceId = updatedConfig._id || updatedConfig.id;
-      const response = await fetch(`http://localhost:3001/api/esp32/devices/${deviceId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updatedConfig),
-      });
-      const data = await response.json();
-      if (data.success) {
-        setConfigs(prev => prev.map(c => c.id === updatedConfig.id ? updatedConfig : c));
-        setEditingConfig(null);
-        toast({
-          title: "Configuration Updated",
-          description: `${updatedConfig.name} configuration has been saved.`,
+    const performUpdate = async () => {
+      try {
+        const deviceId = updatedConfig._id || updatedConfig.id;
+        const response = await fetch(`http://localhost:3001/api/esp32/devices/${deviceId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updatedConfig),
         });
-      } else {
-        throw new Error(data.error);
+        const data = await response.json();
+        if (data.success) {
+          setConfigs(prev => prev.map(c => c.id === updatedConfig.id ? updatedConfig : c));
+          setEditingConfig(null);
+          toast({
+            title: "Configuration Updated",
+            description: `${updatedConfig.name} configuration has been saved.`,
+          });
+        } else {
+          throw new Error(data.error);
+        }
+      } catch (error) {
+        console.error('Error updating device:', error);
+        toast({
+          title: "Error",
+          description: "Failed to update device configuration.",
+          variant: "destructive",
+        });
       }
-    } catch (error) {
-      console.error('Error updating device:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update device configuration.",
-        variant: "destructive",
-      });
+    };
+
+    if (onRequestEsp32Update) {
+      onRequestEsp32Update(updatedConfig.name, performUpdate);
+    } else {
+      await performUpdate();
     }
   };
 

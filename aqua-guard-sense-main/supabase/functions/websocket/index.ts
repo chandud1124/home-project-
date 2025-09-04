@@ -1,3 +1,5 @@
+// If using Deno, ensure you run with --unstable and internet access, or install types with:
+// deno cache https://deno.land/std@0.168.0/http/server.ts
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -10,81 +12,112 @@ const corsHeaders = {
 const connections = new Map()
 
 serve(async (req) => {
+  console.log('Request received:', req.method, req.url)
+  console.log('Headers:', Object.fromEntries(req.headers.entries()))
+
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
-  // Upgrade to WebSocket
-  if (req.headers.get('upgrade') === 'websocket') {
-    const { socket, response } = Deno.upgradeWebSocket(req)
+  // Check for WebSocket upgrade - try multiple ways
+  const upgrade = req.headers.get('upgrade')
+  const connection = req.headers.get('connection')
+  const secWebSocketKey = req.headers.get('sec-websocket-key')
 
-    // Handle WebSocket connection
-    socket.onopen = () => {
-      console.log('WebSocket connection opened')
-    }
+  console.log('Upgrade header:', upgrade)
+  console.log('Connection header:', connection)
+  console.log('Sec-WebSocket-Key header:', secWebSocketKey ? 'present' : 'missing')
 
-    socket.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        console.log('Received WebSocket message:', data.type)
+  // Check if this is a WebSocket upgrade request
+  const isWebSocketUpgrade = (upgrade && upgrade.toLowerCase() === 'websocket') ||
+                            (connection && connection.toLowerCase().includes('upgrade')) ||
+                            secWebSocketKey
 
-        // Initialize Supabase client
-        const supabaseClient = createClient(
-          Deno.env.get('SUPABASE_URL') ?? '',
-          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-        )
+  if (isWebSocketUpgrade) {
+    console.log('WebSocket upgrade detected')
+    try {
+      const { socket, response } = Deno.upgradeWebSocket(req)
+      console.log('WebSocket upgraded successfully')
 
-        switch (data.type) {
-          case 'esp32_register':
-            await handleESP32Registration(supabaseClient, socket, data)
-            break
-          case 'sensor_data':
-            await handleSensorData(supabaseClient, socket, data)
-            break
-          case 'motor_status':
-            await handleMotorStatus(supabaseClient, socket, data)
-            break
-          case 'motor_control':
-            await handleMotorControl(supabaseClient, socket, data)
-            break
-          case 'auto_mode_control':
-            await handleAutoModeControl(supabaseClient, socket, data)
-            break
-          case 'reset_manual':
-            await handleResetManual(supabaseClient, socket, data)
-            break
-          default:
-            console.log('Unknown message type:', data.type)
-        }
-      } catch (error) {
-        console.error('Error processing WebSocket message:', error)
-        socket.send(JSON.stringify({
-          type: 'error',
-          message: 'Invalid message format',
-          timestamp: new Date().toISOString()
-        }))
+      // Handle WebSocket connection
+      socket.onopen = () => {
+        console.log('WebSocket connection opened')
       }
-    }
 
-    socket.onclose = () => {
-      console.log('WebSocket connection closed')
-      // Remove from connections map
-      for (const [id, conn] of connections.entries()) {
-        if (conn.socket === socket) {
-          connections.delete(id)
-          break
+      socket.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          console.log('Received WebSocket message:', data.type)
+
+          // Initialize Supabase client with service role key for WebSocket operations
+          const supabaseClient = createClient(
+            Deno.env.get('SUPABASE_URL') ?? '',
+            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+          )
+
+          switch (data.type) {
+            case 'ping':
+              // Respond to ping with pong
+              socket.send(JSON.stringify({ type: 'pong', data: { timestamp: Date.now(), server_time: new Date().toISOString() } }))
+              break
+            case 'esp32_register':
+              await handleESP32Registration(supabaseClient, socket, data)
+              break
+            case 'sensor_data':
+              await handleSensorData(supabaseClient, socket, data)
+              break
+            case 'motor_status':
+              await handleMotorStatus(supabaseClient, socket, data)
+              break
+            case 'motor_control':
+              await handleMotorControl(supabaseClient, socket, data)
+              break
+            case 'auto_mode_control':
+              await handleAutoModeControl(supabaseClient, socket, data)
+              break
+            case 'reset_manual':
+              await handleResetManual(supabaseClient, socket, data)
+              break
+            default:
+              console.log('Unknown message type:', data.type)
+          }
+        } catch (error) {
+          console.error('Error processing WebSocket message:', error)
+          socket.send(JSON.stringify({
+            type: 'error',
+            message: 'Invalid message format',
+            timestamp: new Date().toISOString()
+          }))
         }
       }
-    }
 
-    socket.onerror = (error) => {
-      console.error('WebSocket error:', error)
-    }
+      socket.onclose = () => {
+        console.log('WebSocket connection closed')
+        // Remove from connections map
+        for (const [id, conn] of connections.entries()) {
+          if (conn.socket === socket) {
+            connections.delete(id)
+            break
+          }
+        }
+      }
 
-    return response
+      socket.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+
+      return response
+    } catch (error) {
+      console.error('WebSocket upgrade failed:', error)
+      return new Response(JSON.stringify({ error: 'WebSocket upgrade failed' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
   }
 
+  console.log('Not a WebSocket request, returning error')
   return new Response(JSON.stringify({ error: 'WebSocket upgrade required' }), {
     status: 400,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }

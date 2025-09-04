@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
-import { apiService } from "@/services/api";
+import { apiService, type ConsumptionData } from "@/services/api";
 import { 
   Droplets, 
   Zap, 
@@ -98,13 +98,6 @@ interface SystemStatusType {
   wifi_strength?: number;
 }
 
-interface ConsumptionData {
-  date: string;
-  consumption: number;
-  fills: number;
-  motorStarts: number;
-}
-
 const EnhancedIndex = () => {
   const [autoMode, setAutoMode] = useState(true);
   const [motorRunning, setMotorRunning] = useState(false);
@@ -116,6 +109,11 @@ const EnhancedIndex = () => {
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatusType | null>(null);
   const [consumptionData, setConsumptionData] = useState<ConsumptionData[]>([]);
+
+  // Motor data state
+  const [motorRuntime, setMotorRuntime] = useState<number>(0);
+  const [motorCurrentDraw, setMotorCurrentDraw] = useState<number>(0);
+  const [motorStartCount, setMotorStartCount] = useState<number>(0);
 
   // Dashboard data state
   const [totalWaterLevel, setTotalWaterLevel] = useState<number>(0);
@@ -154,16 +152,80 @@ const EnhancedIndex = () => {
         const todayConsumption = consumption.reduce((sum, day) => sum + day.consumption, 0);
         setDailyUsage(todayConsumption);
 
+        // Fetch motor events for motor status and data
+        const motorEvents = await apiService.getMotorEvents();
+        if (motorEvents.length > 0) {
+          const lastEvent = motorEvents[motorEvents.length - 1];
+          const lastRunTime = new Date(lastEvent.timestamp);
+          const timeDiff = Date.now() - lastRunTime.getTime();
+          const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60));
+          
+          if (lastEvent.event_type === 'motor_started') {
+            setMotorStatus('Running');
+            setMotorLastRun('Currently running');
+          } else {
+            setMotorStatus('Stopped');
+            setMotorLastRun(`${hoursAgo}h ago`);
+          }
+        } else {
+          setMotorStatus('No Data');
+          setMotorLastRun('No motor events available');
+        }
+
+        // Calculate motor runtime and start count from motor events
+        if (motorEvents.length > 0) {
+          // Calculate today's motor runtime (in minutes)
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          
+          const todayEvents = motorEvents.filter(event => {
+            const eventDate = new Date(event.timestamp);
+            eventDate.setHours(0, 0, 0, 0);
+            return eventDate.getTime() === today.getTime();
+          });
+          
+          // Calculate total runtime for today
+          let totalRuntime = 0;
+          let startCount = 0;
+          let lastStartTime: Date | null = null;
+          
+          todayEvents.forEach(event => {
+            if (event.event_type === 'motor_started') {
+              startCount++;
+              lastStartTime = new Date(event.timestamp);
+            } else if (event.event_type === 'motor_stopped' && lastStartTime) {
+              const stopTime = new Date(event.timestamp);
+              const runtime = (stopTime.getTime() - lastStartTime.getTime()) / (1000 * 60); // minutes
+              totalRuntime += runtime;
+              lastStartTime = null;
+            }
+          });
+          
+          // If motor is currently running, add current runtime
+          if (motorRunning && lastStartTime) {
+            const currentTime = new Date();
+            const currentRuntime = (currentTime.getTime() - lastStartTime.getTime()) / (1000 * 60);
+            totalRuntime += currentRuntime;
+          }
+          
+          setMotorRuntime(Math.round(totalRuntime));
+          setMotorStartCount(startCount);
+          
+          // Set current draw from latest motor event
+          const latestEvent = motorEvents[motorEvents.length - 1];
+          setMotorCurrentDraw(latestEvent.current_draw || 0);
+        } else {
+          setMotorRuntime(0);
+          setMotorStartCount(0);
+          setMotorCurrentDraw(0);
+        }
+
         // Calculate efficiency (mock calculation - would be based on actual metrics)
         const sysStatus = await apiService.getSystemStatus();
         // Simple efficiency calculation based on uptime and performance
         const baseEfficiency = 85;
         const wifiBonus = sysStatus.wifi_connected ? 5 : 0;
         setEfficiency(baseEfficiency + wifiBonus);
-
-        // Set motor status based on system status
-        setMotorStatus('Stopped'); // This would come from motor events
-        setMotorLastRun('2h ago'); // This would be calculated from motor events
 
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error);
@@ -212,6 +274,11 @@ const EnhancedIndex = () => {
     getConsumptionData: async (): Promise<ConsumptionData[]> => {
       const response = await fetch('http://localhost:3001/api/consumption');
       if (!response.ok) throw new Error('Failed to fetch consumption data');
+      return response.json();
+    },
+    getMotorEvents: async (): Promise<any[]> => {
+      const response = await fetch('http://localhost:3001/api/motor/events');
+      if (!response.ok) throw new Error('Failed to fetch motor events');
       return response.json();
     }
   };
@@ -348,6 +415,30 @@ const EnhancedIndex = () => {
                 timestamp: statusData.timestamp
               };
               setSystemStatus(newSystemStatus);
+              break;
+            }
+            case 'motor_status': {
+              const motorData = message.data;
+              console.log('Processing motor_status:', motorData);
+              
+              // Update motor running state
+              setMotorRunning(motorData.motor_running);
+              
+              // Update motor current draw
+              setMotorCurrentDraw(motorData.current_draw || 0);
+              
+              // Update motor status display
+              setMotorStatus(motorData.motor_running ? 'Running' : 'Stopped');
+              
+              // Update last run time
+              if (motorData.motor_running) {
+                setMotorLastRun('Currently running');
+              } else {
+                setMotorLastRun(new Date().toLocaleString());
+              }
+              
+              // Update ESP32 last seen
+              setEsp32LastSeen(new Date(motorData.timestamp));
               break;
             }
           }
@@ -554,45 +645,61 @@ const EnhancedIndex = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
-      {/* Animated Background Elements */}
+      {/* Animated Background Elements - Mobile Optimized */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary/5 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-accent/5 rounded-full blur-3xl animate-pulse delay-1000" />
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-success/3 rounded-full blur-3xl animate-pulse delay-500" />
+        {/* Large background elements - hidden on mobile for performance */}
+        <div className="hidden md:block absolute -top-40 -right-40 w-80 h-80 bg-primary/5 rounded-full blur-3xl animate-pulse" />
+        <div className="hidden md:block absolute -bottom-40 -left-40 w-96 h-96 bg-accent/5 rounded-full blur-3xl animate-pulse delay-1000" />
+        <div className="hidden md:block absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-success/3 rounded-full blur-3xl animate-pulse delay-500" />
+
+        {/* Mobile-optimized smaller elements */}
+        <div className="md:hidden absolute -top-20 -right-20 w-40 h-40 bg-primary/3 rounded-full blur-xl animate-pulse" />
+        <div className="md:hidden absolute -bottom-20 -left-20 w-48 h-48 bg-accent/3 rounded-full blur-xl animate-pulse delay-1000" />
+        <div className="md:hidden absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-success/2 rounded-full blur-xl animate-pulse delay-500" />
       </div>
 
       {/* Header */}
       <header className="relative z-10 border-b border-border/50 bg-card/30 backdrop-blur-xl">
-        <div className="container mx-auto px-4 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
+        <div className="container mx-auto px-4 py-4 sm:py-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center space-x-3 sm:space-x-4">
               <div className="flex items-center space-x-3">
                 <div className="p-2 bg-primary/10 rounded-xl border border-primary/20">
-                  <Waves className="h-8 w-8 text-primary" />
+                  <Waves className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+                  <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
                     AquaFlow Pro
                   </h1>
-                  <p className="text-sm text-muted-foreground">Industrial Water Management System</p>
+                  <p className="text-xs sm:text-sm text-muted-foreground">Industrial Water Management System</p>
                 </div>
               </div>
             </div>
             
-            <div className="flex items-center space-x-4">
-              <Badge variant="outline" className={`px-3 py-1 ${
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4 justify-center sm:justify-end">
+              <Badge variant="outline" className={`px-2 sm:px-3 py-1 text-xs sm:text-sm ${
                 isConnected 
                   ? 'bg-success/10 border-success/20 text-success' 
                   : 'bg-destructive/10 border-destructive/20 text-destructive'
               }`}>
-                <div className={`w-2 h-2 rounded-full mr-2 ${
+                <div className={`w-2 h-2 rounded-full mr-1 sm:mr-2 ${
                   isConnected ? 'bg-success animate-pulse' : 'bg-destructive'
                 }`} />
-                {isConnected ? 'Real-time Connected' : 'Real-time Offline'}
+                <span className="hidden sm:inline">
+                  {isConnected ? 'Real-time Connected' : 'Real-time Offline'}
+                </span>
+                <span className="sm:hidden">
+                  {isConnected ? 'Connected' : 'Offline'}
+                </span>
               </Badge>
               {reconnectAttempts > 0 && (
-                <Badge variant="outline" className="px-3 py-1 bg-warning/10 border-warning/20 text-warning">
-                  Reconnecting... ({reconnectAttempts}/{maxReconnectAttempts})
+                <Badge variant="outline" className="px-2 sm:px-3 py-1 text-xs sm:text-sm bg-warning/10 border-warning/20 text-warning">
+                  <span className="hidden sm:inline">
+                    Reconnecting... ({reconnectAttempts}/{maxReconnectAttempts})
+                  </span>
+                  <span className="sm:hidden">
+                    Reconnecting ({reconnectAttempts})
+                  </span>
                 </Badge>
               )}
             </div>
@@ -763,10 +870,10 @@ const EnhancedIndex = () => {
               <Card className="bg-card/60 backdrop-blur-sm border-border/50">
                 <AutoMotorControl
                   isRunning={motorRunning}
-                  powerDetected={true}
                   autoMode={autoMode}
-                  currentDraw={2.3}
-                  runtime={145}
+                  currentDraw={motorCurrentDraw}
+                  runtime={motorRuntime}
+                  motorStartCount={motorStartCount}
                   onToggleAuto={handleAutoModeToggle}
                   onManualControl={(action) => {
                     if (ws && ws.readyState === WebSocket.OPEN) {

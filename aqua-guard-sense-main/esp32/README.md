@@ -2,6 +2,74 @@
 
 This folder contains the ESP32 microcontroller code for the Aqua Guard Sense water tank monitoring system.
 
+## 🚀 **PRODUCTION DEPLOYMENT STATUS**
+
+✅ **Backend Services**: Deployed on Supabase  
+✅ **Frontend**: Deployed on Firebase  
+✅ **ESP32 Firmware**: Updated for production  
+✅ **WebSocket**: Ready for real-time communication  
+
+## 📡 **PRODUCTION CONFIGURATION**
+
+The ESP32 firmware has been updated to connect to your production Supabase backend:
+
+- **Supabase URL**: `dwcouaacpqipvvsxiygo.supabase.co`
+- **WebSocket Path**: `/functions/v1/websocket`
+- **Connection**: Secure WebSocket (WSS) on port 443
+- **Authentication**: Supabase anon key included
+
+## 🔧 **BEFORE UPLOADING TO ESP32**
+
+### **1. Update WiFi Credentials**
+Edit the following in your ESP32 code:
+```cpp
+const char* WIFI_SSID = "YOUR_WIFI_NAME";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+```
+
+### **2. Update Device IDs (Optional)**
+```cpp
+const char* DEVICE_ID = "ESP32_TOP_001";    // For top tank
+const char* DEVICE_ID = "ESP32_SUMP_001";  // For sump tank
+```
+
+### **3. Verify Hardware Connections**
+- AJ-SR04M Ultrasonic Sensor: TRIG → GPIO 5, ECHO → GPIO 18
+- Float Switch: GPIO 4 (sump tank only)
+- Manual Button: GPIO 12 (sump tank only)
+- Motor Relay: GPIO 13 (sump tank only)
+- Buzzer: GPIO 14 (optional)
+- LED: GPIO 15 (optional)
+
+## 🧪 **TESTING PRODUCTION SETUP**
+
+### **1. Upload Firmware**
+1. Open the appropriate `.ino` file in Arduino IDE
+2. Update WiFi credentials
+3. Upload to your ESP32 board
+4. Open Serial Monitor (115200 baud)
+
+### **2. Monitor Connection**
+You should see in Serial Monitor:
+```
+Connecting to WiFi...
+WiFi connected! IP: 192.168.x.x
+Connecting to Supabase WebSocket...
+URL: wss://dwcouaacpqipvvsxiygo.supabase.co
+Path: /functions/v1/websocket
+WebSocket connected!
+```
+
+### **3. Check Web Dashboard**
+1. Visit: https://aqua-guard-sense.web.app
+2. Login with your PIN
+3. You should see real-time data from your ESP32 devices
+
+### **4. Verify Data Flow**
+- Tank levels should update every 3 seconds
+- Motor status should be visible
+- Alerts should appear if water levels are critical
+
 ## 📁 Files Overview
 
 ### **ESP32_TopTank_Enhanced.ino**

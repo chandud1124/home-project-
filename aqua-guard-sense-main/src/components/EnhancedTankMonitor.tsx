@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Droplets, AlertTriangle, CheckCircle, Wifi, Zap, Settings } from "lucide-react";
-import { useState } from "react";
+import { Droplets, AlertTriangle, CheckCircle, Wifi, Zap, Settings, TrendingUp, TrendingDown } from "lucide-react";
+import { useState, useEffect } from "react";
 
 interface EnhancedTankMonitorProps {
   title: string;
@@ -44,8 +44,38 @@ export const EnhancedTankMonitor = ({
     ipAddress: '192.168.0.132'
   });
   const [isConnecting, setIsConnecting] = useState(false);
+  const [previousLevel, setPreviousLevel] = useState(currentLevel);
+  const [flowDirection, setFlowDirection] = useState<'filling' | 'draining' | 'stable'>('stable');
 
   const currentLiters = Math.round((currentLevel / 100) * capacity);
+
+  // Detect flow direction
+  useEffect(() => {
+    if (currentLevel > previousLevel + 1) {
+      setFlowDirection('filling');
+    } else if (currentLevel < previousLevel - 1) {
+      setFlowDirection('draining');
+    } else {
+      setFlowDirection('stable');
+    }
+    setPreviousLevel(currentLevel);
+  }, [currentLevel, previousLevel]);
+
+  const getFlowAnimation = () => {
+    switch(flowDirection) {
+      case 'filling': return 'animate-water-filling';
+      case 'draining': return 'animate-water-draining';
+      default: return 'animate-water-fill';
+    }
+  };
+
+  const getFlowIcon = () => {
+    switch(flowDirection) {
+      case 'filling': return <TrendingUp className="w-4 h-4 text-success" />;
+      case 'draining': return <TrendingDown className="w-4 h-4 text-warning" />;
+      default: return null;
+    }
+  };
   
   const getTankColor = (level: number) => {
     if (level >= 80) return 'bg-gradient-to-t from-success to-success/80'; // Full - Success
@@ -94,7 +124,7 @@ export const EnhancedTankMonitor = ({
   };
 
   return (
-    <Card className="p-4 bg-card/60 backdrop-blur-sm border-border/50">
+    <Card className="p-4 bg-card/60 md:backdrop-blur-sm backdrop-blur-none border-border/50">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <span className="text-2xl">{symbol}</span>
@@ -113,9 +143,12 @@ export const EnhancedTankMonitor = ({
         </div>
         
         <div className="flex flex-col items-end gap-2">
-          <Badge variant={getStatusBadgeVariant(status)}>
-            {status.toUpperCase()}
-          </Badge>
+          <div className="flex items-center gap-2">
+            {getFlowIcon()}
+            <Badge variant={getStatusBadgeVariant(status)}>
+              {status.toUpperCase()}
+            </Badge>
+          </div>
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <Wifi className={`w-3 h-3 ${esp32Status.connected ? 'text-success' : 'text-destructive'}`} />
             <span>WiFi: {esp32Status.wifiStrength}dBm</span>
@@ -123,27 +156,55 @@ export const EnhancedTankMonitor = ({
         </div>
       </div>
 
-      {/* Enhanced Tank Visual with Dark Theme */}
+      {/* Enhanced Tank Visual with Realistic Water Animation */}
       <div className="mb-4">
         <div className="relative w-full h-32 bg-muted rounded-lg overflow-hidden border-2 border-border">
-          <div 
-            className={`absolute bottom-0 left-0 w-full transition-all duration-1000 ease-out ${getTankColor(currentLevel)}`}
-            style={{ height: `${currentLevel}%` }}
+          {/* Water Level with Enhanced Animation */}
+          <div
+            className={`absolute bottom-0 left-0 w-full transition-all duration-1500 ease-out ${getFlowAnimation()} ${getTankColor(currentLevel)}`}
+            style={{
+              height: `${currentLevel}%`,
+              '--fill-level': `${currentLevel}%`,
+              '--previous-level': `${previousLevel}%`
+            } as React.CSSProperties & { '--fill-level': string; '--previous-level': string }}
           >
-            <div className="absolute inset-0 bg-gradient-to-t from-transparent to-white/10" />
+            {/* Water Surface Effect - Desktop Only */}
+            <div className="hidden md:block absolute top-0 left-0 w-full h-3 bg-gradient-to-b from-white/25 to-transparent animate-water-wave" />
+
+            {/* Ripple Effect - Desktop Only */}
+            <div className="hidden md:block absolute top-0 left-1/2 transform -translate-x-1/2 w-10 h-10 bg-white/15 rounded-full animate-water-ripple" />
+
+            {/* Bubbles Effect for Filling - Desktop Only */}
+            {currentLevel > 15 && (
+              <div className="hidden md:flex">
+                <div className="absolute bottom-1/4 left-1/5 w-1.5 h-1.5 bg-white/40 rounded-full animate-water-bubbles" style={{ animationDelay: '0s' }} />
+                <div className="absolute bottom-1/3 left-4/5 w-1 h-1 bg-white/30 rounded-full animate-water-bubbles" style={{ animationDelay: '1.2s' }} />
+                <div className="absolute bottom-2/5 left-2/5 w-1 h-1 bg-white/35 rounded-full animate-water-bubbles" style={{ animationDelay: '0.8s' }} />
+                <div className="absolute bottom-1/2 left-3/5 w-0.5 h-0.5 bg-white/25 rounded-full animate-water-bubbles" style={{ animationDelay: '2.1s' }} />
+              </div>
+            )}
+
+            {/* Mobile Static Water Surface */}
+            <div className="md:hidden absolute top-0 left-0 w-full h-2 bg-gradient-to-b from-white/20 to-transparent" />
+
+            {/* Enhanced Gradient Overlay */}
+            <div className="absolute inset-0 bg-gradient-to-t from-transparent via-white/5 to-white/15" />
           </div>
-          
-          {/* Water Level Indicator */}
+
+          {/* Water Level Indicator with Enhanced Styling */}
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="bg-card/90 backdrop-blur-sm rounded px-3 py-1 shadow border border-border/50">
+            <div className="bg-card/95 md:backdrop-blur-md backdrop-blur-none rounded-xl px-4 py-2 shadow-xl border border-border/60">
               <span className="text-xl font-bold text-foreground">
                 {currentLevel}%
               </span>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {currentLiters}L / {capacity}L
+              </div>
             </div>
           </div>
 
-          {/* Level Markers */}
-          <div className="absolute right-2 top-0 h-full flex flex-col justify-between py-2 text-xs text-muted-foreground">
+          {/* Enhanced Level Markers */}
+          <div className="absolute right-2 top-0 h-full flex flex-col justify-between py-2 text-xs text-muted-foreground/70 font-medium">
             <span>100%</span>
             <span>75%</span>
             <span>50%</span>
@@ -166,31 +227,18 @@ export const EnhancedTankMonitor = ({
       </div>
 
       {/* Float Switch & Motor Status */}
-      {(floatSwitch !== undefined || motorRunning !== undefined) && (
+      {motorRunning !== undefined && (
         <div className="mt-4 pt-4 border-t border-border/50">
-          <div className="grid grid-cols-2 gap-4">
-            {floatSwitch !== undefined && (
-              <div className="text-center">
-                <p className="text-sm text-muted-foreground">Float Switch</p>
-                <Badge 
-                  variant={floatSwitch ? 'default' : 'destructive'} 
-                  className="mt-1"
-                >
-                  {floatSwitch ? 'Water Detected' : 'No Water'}
-                </Badge>
-              </div>
-            )}
-            {motorRunning !== undefined && (
-              <div className="text-center">
-                <p className="text-sm text-muted-foreground">Motor Status</p>
-                <Badge 
-                  variant={motorRunning ? 'default' : 'secondary'} 
-                  className="mt-1"
-                >
-                  {motorRunning ? 'Running' : 'Stopped'}
-                </Badge>
-              </div>
-            )}
+          <div className="grid grid-cols-1 gap-4">
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground">Motor Status</p>
+              <Badge 
+                variant={motorRunning ? 'default' : 'secondary'} 
+                className="mt-1"
+              >
+                {motorRunning ? 'Running' : 'Stopped'}
+              </Badge>
+            </div>
           </div>
           {manualOverride && (
             <div className="mt-2 text-center">

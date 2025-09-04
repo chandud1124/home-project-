@@ -70,6 +70,11 @@ const Index = () => {
   const [efficiency, setEfficiency] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Motor data state
+  const [motorRuntime, setMotorRuntime] = useState<number>(0);
+  const [motorCurrentDraw, setMotorCurrentDraw] = useState<number>(0);
+  const [motorStartCount, setMotorStartCount] = useState<number>(0);
+
   // AI state
   const [aiInsights, setAiInsights] = useState<AIInsight[]>([]);
   const [queryResponse, setQueryResponse] = useState<string>('');
@@ -89,37 +94,8 @@ const Index = () => {
   // Ensure AI insights always has fallback data
   useEffect(() => {
     if (aiInsights.length === 0) {
-      console.log('🤖 AI: No insights available, setting fallback data');
-      const fallbackInsights: AIInsight[] = [
-        {
-          id: 'fallback-prediction',
-          type: 'prediction',
-          title: 'Tank Empty Prediction',
-          message: 'Based on current usage patterns, tank will be empty in approximately 4.2 hours (85% confidence)',
-          confidence: 0.85,
-          priority: 'medium',
-          timestamp: new Date()
-        },
-        {
-          id: 'fallback-anomaly',
-          type: 'anomaly',
-          title: 'Usage Pattern Analysis',
-          message: 'AI is learning from your water usage patterns. Real insights will be available once data is connected.',
-          confidence: 0.6,
-          priority: 'low',
-          timestamp: new Date()
-        },
-        {
-          id: 'fallback-recommendation',
-          type: 'recommendation',
-          title: 'Smart Scheduling',
-          message: 'Optimal fill time detected: Current hour has 40% less water usage than peak hours',
-          confidence: 0.75,
-          priority: 'low',
-          timestamp: new Date()
-        }
-      ];
-      setAiInsights(fallbackInsights);
+      console.log('🤖 AI: No insights available, will fetch from backend');
+      // Remove fallback data - let AI insights load from backend
     }
   }, [aiInsights.length]);
 
@@ -164,6 +140,54 @@ const Index = () => {
         } else {
           setMotorStatus('No Data');
           setMotorLastRun('No motor events available');
+        }
+
+        // Calculate motor runtime and start count from motor events
+        if (motorEvents.length > 0) {
+          // Calculate today's motor runtime (in minutes)
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          
+          const todayEvents = motorEvents.filter(event => {
+            const eventDate = new Date(event.timestamp);
+            eventDate.setHours(0, 0, 0, 0);
+            return eventDate.getTime() === today.getTime();
+          });
+          
+          // Calculate total runtime for today
+          let totalRuntime = 0;
+          let startCount = 0;
+          let lastStartTime: Date | null = null;
+          
+          todayEvents.forEach(event => {
+            if (event.event_type === 'motor_started') {
+              startCount++;
+              lastStartTime = new Date(event.timestamp);
+            } else if (event.event_type === 'motor_stopped' && lastStartTime) {
+              const stopTime = new Date(event.timestamp);
+              const runtime = (stopTime.getTime() - lastStartTime.getTime()) / (1000 * 60); // minutes
+              totalRuntime += runtime;
+              lastStartTime = null;
+            }
+          });
+          
+          // If motor is currently running, add current runtime
+          if (motorRunning && lastStartTime) {
+            const currentTime = new Date();
+            const currentRuntime = (currentTime.getTime() - lastStartTime.getTime()) / (1000 * 60);
+            totalRuntime += currentRuntime;
+          }
+          
+          setMotorRuntime(Math.round(totalRuntime));
+          setMotorStartCount(startCount);
+          
+          // Set current draw from latest motor event
+          const latestEvent = motorEvents[motorEvents.length - 1];
+          setMotorCurrentDraw(latestEvent.current_draw || 0);
+        } else {
+          setMotorRuntime(0);
+          setMotorStartCount(0);
+          setMotorCurrentDraw(0);
         }
 
         // Fetch consumption data for daily usage
@@ -405,14 +429,6 @@ const Index = () => {
         });
       }
       
-      // Add power outage prediction
-      const powerPrediction = aiService.predictPowerOutageImpact(
-        totalWaterLevel, 
-        0, // sump level - you can add this
-        { top: 1000, sump: 800 } // tank capacities
-      );
-      newInsights.push(powerPrediction);
-      
       setAiInsights(newInsights);
     }
   }, [consumptionHistory, totalWaterLevel]);
@@ -539,6 +555,75 @@ const Index = () => {
     lastSeen: null as Date | null
   });
 
+  // WebSocket message handling for real-time updates
+  useEffect(() => {
+    // Register WebSocket message handlers
+    apiService.onWebSocketMessage('system_status', (data) => {
+      console.log('📡 WebSocket system_status received:', data);
+      console.log('📡 ESP32 sump status:', data.esp32_sump_status);
+
+      // Update ESP32 status based on real-time data
+      setEsp32TopStatus({
+        connected: data.esp32_top_status === 'online',
+        wifiStrength: data.wifi_strength || 0,
+        lastSeen: data.esp32_top_status === 'online' ? new Date() : null
+      });
+
+      setEsp32SumpStatus({
+        connected: data.esp32_sump_status === 'online',
+        wifiStrength: data.wifi_strength || 0,
+        lastSeen: data.esp32_sump_status === 'online' ? new Date() : null
+      });
+
+      console.log('📡 Updated ESP32 sump status:', data.esp32_sump_status === 'online');
+    });
+
+    apiService.onWebSocketMessage('tank_reading', (data) => {
+      console.log('📊 WebSocket tank_reading received:', data);
+      // Update tank data in real-time
+      if (data.tank_type === 'sump_tank' || data.tank_type === 'sump') {
+        setTotalWaterLevel(data.level_liters);
+        // Also update water level change (mock calculation)
+        setWaterLevelChange(data.level_percentage > 50 ? 2.5 : -1.8);
+      }
+    });
+
+    apiService.onWebSocketMessage('motor_status', (data) => {
+      console.log('⚙️ WebSocket motor_status received:', data);
+      // Update motor status in real-time
+      setMotorRunning(data.motor_running);
+      setMotorStatus(data.motor_running ? 'Running' : 'Stopped');
+      setMotorLastRun(data.motor_running ? 'Currently running' : new Date().toLocaleString());
+      setMotorCurrentDraw(data.current_draw || 0);
+    });
+
+    apiService.onWebSocketMessage('system_alert', (data) => {
+      console.log('🚨 WebSocket system_alert received:', data);
+      // Add new alert to the list
+      const newAlert: SystemAlert = {
+        id: data._id || data.id || Date.now().toString(),
+        type: data.type as "warning" | "info" | "error",
+        message: data.message,
+        timestamp: new Date(data.timestamp),
+        resolved: data.resolved || false
+      };
+      setAlerts(prev => [newAlert, ...prev]);
+    });
+
+    // Handle manual override status updates
+    apiService.onWebSocketMessage('manual_override', (data) => {
+      console.log('🔧 WebSocket manual_override received:', data);
+      // Update manual override status
+      // Note: You might need to add a state variable for manual override status
+    });
+
+    // Cleanup function to remove message handlers
+    return () => {
+      // Note: apiService doesn't have a remove handler method, so handlers stay active
+      // This is fine for this use case as the component will manage its own state updates
+    };
+  }, []);
+
   // PIN Settings state
   const [pinSettingsOpen, setPinSettingsOpen] = useState(false);
   const [esp32ConfigOpen, setEsp32ConfigOpen] = useState(false);  const handleAIQuery = (query: string) => {
@@ -625,11 +710,7 @@ const Index = () => {
   const requestPinForMotorStart = () => {
     if (isPinSessionValid()) {
       // Session is valid, execute action directly
-      setMotorRunning(true);
-      toast({
-        title: "Motor Started",
-        description: "Motor has been started successfully.",
-      });
+      handleMotorStart();
       return;
     }
 
@@ -640,11 +721,7 @@ const Index = () => {
       actionType: 'motor_start',
       onSuccess: () => {
         updatePinSession();
-        setMotorRunning(true);
-        toast({
-          title: "Motor Started",
-          description: "Motor has been started successfully.",
-        });
+        handleMotorStart();
         setPinModal(prev => ({ ...prev, isOpen: false }));
       }
     });
@@ -653,11 +730,7 @@ const Index = () => {
   const requestPinForMotorStop = () => {
     if (isPinSessionValid()) {
       // Session is valid, execute action directly
-      setMotorRunning(false);
-      toast({
-        title: "Motor Stopped",
-        description: "Motor has been stopped successfully.",
-      });
+      handleMotorStop();
       return;
     }
 
@@ -668,27 +741,59 @@ const Index = () => {
       actionType: 'motor_stop',
       onSuccess: () => {
         updatePinSession();
-        setMotorRunning(false);
-        toast({
-          title: "Motor Stopped",
-          description: "Motor has been stopped successfully.",
-        });
+        handleMotorStop();
         setPinModal(prev => ({ ...prev, isOpen: false }));
       }
     });
   };
 
+  // Actual motor control functions that communicate with backend
+  const handleMotorStart = async () => {
+    try {
+      console.log('🚀 Starting motor...');
+      const result = await apiService.controlMotor('start');
+      if (result.success) {
+        setMotorRunning(true);
+        toast({
+          title: "Motor Started",
+          description: "Motor has been started successfully.",
+        });
+      }
+    } catch (error) {
+      console.error('❌ Failed to start motor:', error);
+      toast({
+        title: "Motor Start Failed",
+        description: "Failed to start the motor. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleMotorStop = async () => {
+    try {
+      console.log('🛑 Stopping motor...');
+      const result = await apiService.controlMotor('stop');
+      if (result.success) {
+        setMotorRunning(false);
+        toast({
+          title: "Motor Stopped",
+          description: "Motor has been stopped successfully.",
+        });
+      }
+    } catch (error) {
+      console.error('❌ Failed to stop motor:', error);
+      toast({
+        title: "Motor Stop Failed",
+        description: "Failed to stop the motor. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const requestPinForAutoModeToggle = (enabled: boolean) => {
     if (isPinSessionValid()) {
       // Session is valid, execute action directly
-      setAutoMode(enabled);
-      if (!enabled) {
-        setMotorRunning(false);
-      }
-      toast({
-        title: enabled ? "Auto Mode Enabled" : "Auto Mode Disabled",
-        description: enabled ? "Motor will automatically start/stop based on water levels." : "Motor is now in manual control mode.",
-      });
+      handleAutoModeToggle(enabled);
       return;
     }
 
@@ -699,17 +804,33 @@ const Index = () => {
       actionType: 'auto_mode_toggle',
       onSuccess: () => {
         updatePinSession();
-        setAutoMode(enabled);
-        if (!enabled) {
-          setMotorRunning(false);
-        }
-        toast({
-          title: enabled ? "Auto Mode Enabled" : "Auto Mode Disabled",
-          description: enabled ? "Motor will automatically start/stop based on water levels." : "Motor is now in manual control mode.",
-        });
+        handleAutoModeToggle(enabled);
         setPinModal(prev => ({ ...prev, isOpen: false }));
       }
     });
+  };
+
+  // Actual auto mode toggle function that communicates with backend
+  const handleAutoModeToggle = async (enabled: boolean) => {
+    try {
+      console.log(`🔄 ${enabled ? 'Enabling' : 'Disabling'} auto mode...`);
+      await apiService.setAutoMode(enabled);
+      setAutoMode(enabled);
+      if (!enabled) {
+        setMotorRunning(false);
+      }
+      toast({
+        title: enabled ? "Auto Mode Enabled" : "Auto Mode Disabled",
+        description: enabled ? "Motor will automatically start/stop based on water levels." : "Motor is now in manual control mode.",
+      });
+    } catch (error) {
+      console.error('❌ Failed to toggle auto mode:', error);
+      toast({
+        title: "Auto Mode Toggle Failed",
+        description: "Failed to change auto mode. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   // ESP32 Configuration PIN Authentication functions
@@ -775,61 +896,70 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
-      {/* Animated Background Elements */}
+      {/* Animated Background Elements - Mobile Optimized */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary/5 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-accent/5 rounded-full blur-3xl animate-pulse delay-1000" />
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-success/3 rounded-full blur-3xl animate-pulse delay-500" />
+        {/* Large background elements - hidden on mobile for performance */}
+        <div className="hidden md:block absolute -top-40 -right-40 w-80 h-80 bg-primary/5 rounded-full blur-3xl animate-pulse" />
+        <div className="hidden md:block absolute -bottom-40 -left-40 w-96 h-96 bg-accent/5 rounded-full blur-3xl animate-pulse delay-1000" />
+        <div className="hidden md:block absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-success/3 rounded-full blur-3xl animate-pulse delay-500" />
+
+        {/* Mobile-optimized smaller elements */}
+        <div className="md:hidden absolute -top-20 -right-20 w-40 h-40 bg-primary/3 rounded-full blur-xl animate-pulse" />
+        <div className="md:hidden absolute -bottom-20 -left-20 w-48 h-48 bg-accent/3 rounded-full blur-xl animate-pulse delay-1000" />
+        <div className="md:hidden absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-success/2 rounded-full blur-xl animate-pulse delay-500" />
       </div>
 
       {/* Header */}
       <header className="relative z-10 border-b border-border/50 bg-card/30 backdrop-blur-xl">
-        <div className="container mx-auto px-4 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
+        <div className="container mx-auto px-4 py-4 sm:py-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center space-x-3 sm:space-x-4">
               <div className="flex items-center space-x-3">
                 <div className="p-2 bg-primary/10 rounded-xl border border-primary/20">
-                  <Waves className="h-8 w-8 text-primary" />
+                  <Waves className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+                  <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
                     AquaFlow Pro
                   </h1>
-                  <p className="text-sm text-muted-foreground">Industrial Water Management System</p>
+                  <p className="text-xs sm:text-sm text-muted-foreground">Industrial Water Management System</p>
                 </div>
               </div>
             </div>
             
-            <div className="flex items-center space-x-4">
-              <Badge variant="outline" className="px-3 py-1 bg-success/10 border-success/20 text-success">
-                <Lock className="w-3 h-3 mr-2" />
-                PIN Protected
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4 justify-center sm:justify-end">
+              <Badge variant="outline" className="px-2 sm:px-3 py-1 text-xs sm:text-sm bg-success/10 border-success/20 text-success">
+                <Lock className="w-3 h-3 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">PIN Protected</span>
+                <span className="sm:hidden">PIN</span>
               </Badge>
               {pinSession.authenticated && (
                 <Badge 
                   variant="outline" 
-                  className={`px-3 py-1 animate-pulse ${
+                  className={`px-2 sm:px-3 py-1 text-xs sm:text-sm animate-pulse ${
                     sessionTimeLeft <= 1 
                       ? 'bg-warning/10 border-warning/20 text-warning' 
                       : 'bg-primary/10 border-primary/20 text-primary'
                   }`}
                 >
-                  <div className={`w-2 h-2 rounded-full mr-2 ${
+                  <div className={`w-2 h-2 rounded-full mr-1 sm:mr-2 ${
                     sessionTimeLeft <= 1 ? 'bg-warning' : 'bg-primary'
                   }`} />
-                  Session Active
-                  <span className="ml-2 text-xs">
-                    ({sessionTimeLeft}m left)
+                  <span className="hidden sm:inline">Session Active</span>
+                  <span className="sm:hidden">Active</span>
+                  <span className="ml-1 sm:ml-2 text-xs">
+                    ({sessionTimeLeft}m)
                   </span>
                 </Badge>
               )}
-              <Badge variant="outline" className="px-3 py-1 bg-success/10 border-success/20 text-success">
-                <div className="w-2 h-2 bg-success rounded-full mr-2 animate-pulse" />
-                System Online
+              <Badge variant="outline" className="px-2 sm:px-3 py-1 text-xs sm:text-sm bg-success/10 border-success/20 text-success">
+                <div className="w-2 h-2 bg-success rounded-full mr-1 sm:mr-2 animate-pulse" />
+                <span className="hidden sm:inline">System Online</span>
+                <span className="sm:hidden">Online</span>
               </Badge>
               <Badge 
                 variant="outline" 
-                className={`px-3 py-1 ${
+                className={`px-2 sm:px-3 py-1 text-xs sm:text-sm ${
                   esp32TopStatus.connected && esp32SumpStatus.connected 
                     ? 'bg-success/10 border-success/20 text-success' 
                     : esp32TopStatus.connected || esp32SumpStatus.connected
@@ -837,33 +967,31 @@ const Index = () => {
                     : 'bg-destructive/10 border-destructive/20 text-destructive'
                 }`}
               >
-                <div className={`w-2 h-2 rounded-full mr-2 animate-pulse ${
+                <div className={`w-2 h-2 rounded-full mr-1 sm:mr-2 animate-pulse ${
                   esp32TopStatus.connected && esp32SumpStatus.connected 
                     ? 'bg-success' 
                     : esp32TopStatus.connected || esp32SumpStatus.connected
                     ? 'bg-warning'
                     : 'bg-destructive'
                 }`} />
-                ESP32: {
-                  esp32TopStatus.connected && esp32SumpStatus.connected 
-                    ? 'All Connected' 
-                    : esp32TopStatus.connected || esp32SumpStatus.connected
-                    ? 'Partial'
-                    : 'Disconnected'
-                }
-              </Badge>
-              <Badge 
-                variant="outline" 
-                className={`px-3 py-1 ${
-                  esp32TopStatus.connected && esp32SumpStatus.connected 
-                    ? 'bg-success/10 border-success/20 text-success' 
-                    : 'bg-warning/10 border-warning/20 text-warning'
-                }`}
-              >
-                <div className={`w-2 h-2 rounded-full mr-2 animate-pulse ${
-                  esp32TopStatus.connected && esp32SumpStatus.connected ? 'bg-success' : 'bg-warning'
-                }`} />
-                ESP32: {esp32TopStatus.connected && esp32SumpStatus.connected ? 'All Connected' : 'Partial/Disconnected'}
+                <span className="hidden sm:inline">
+                  ESP32: {
+                    esp32TopStatus.connected && esp32SumpStatus.connected 
+                      ? 'All Connected' 
+                      : esp32TopStatus.connected || esp32SumpStatus.connected
+                      ? 'Partial'
+                      : 'Disconnected'
+                  }
+                </span>
+                <span className="sm:hidden">
+                  ESP32: {
+                    esp32TopStatus.connected && esp32SumpStatus.connected 
+                      ? 'All' 
+                      : esp32TopStatus.connected || esp32SumpStatus.connected
+                      ? 'Part'
+                      : 'Off'
+                  }
+                </span>
               </Badge>
             </div>
           </div>
@@ -1039,10 +1167,10 @@ const Index = () => {
               <Card className="bg-card/60 backdrop-blur-sm border-border/50">
                 <AutoMotorControl
                   isRunning={motorRunning}
-                  powerDetected={true}
                   autoMode={autoMode}
-                  currentDraw={2.3}
-                  runtime={145}
+                  currentDraw={motorCurrentDraw}
+                  runtime={motorRuntime}
+                  motorStartCount={motorStartCount}
                   onToggleAuto={requestPinForAutoModeToggle}
                   onManualControl={(action) => {
                     if (action === 'start') {

@@ -26,13 +26,14 @@
 
 // ========== CONFIGURATION SECTION ==========
 
-// WiFi Configuration - UPDATE THESE VALUES
+// WiFi Configuration - UPDATE THESE VALUES FOR YOUR NETWORK
 const char* WIFI_SSID = "I am Not A Witch I am Your Wifi";
 const char* WIFI_PASSWORD = "Whoareu@0000";
 
-// Server Configuration - UPDATE SERVER IP
-const char* SERVER_IP = "192.168.0.108";
-const int WEBSOCKET_PORT = 8083;
+// Server Configuration - PRODUCTION SUPABASE URLs
+const char* SUPABASE_URL = "dwcouaacpqipvvsxiygo.supabase.co";
+const char* WEBSOCKET_PATH = "/functions/v1/websocket";
+const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4";
 
 // Device Configuration
 const char* DEVICE_TYPE = "top_tank";
@@ -247,6 +248,16 @@ void sendSensorData() {
   Serial.println("📊 Sensor data sent - Level: " + String(currentLevel, 1) + "% (" + alertStatus + ")");
 }
 
+// Send ping to keep connection alive
+void sendPing() {
+  StaticJsonDocument<64> doc;
+  doc["type"] = "ping";
+  String jsonString;
+  serializeJson(doc, jsonString);
+  webSocket.sendTXT(jsonString);
+  Serial.println("🏓 Ping sent");
+}
+
 // WebSocket event handler
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
@@ -289,6 +300,8 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
           } else if (messageType == "acknowledge_alert") {
             // Server acknowledged alert
             Serial.println("✅ Alert acknowledged by server");
+          } else if (messageType == "pong") {
+            Serial.println("🏓 Pong received - connection is alive");
           }
         }
       }
@@ -365,10 +378,21 @@ void setup() {
 
   // Connect to WebSocket
   if (wifiConnected) {
-    String wsUrl = String("ws://") + SERVER_IP + ":" + WEBSOCKET_PORT;
-    Serial.println("Connecting to WebSocket: " + wsUrl);
-    webSocket.begin(SERVER_IP, WEBSOCKET_PORT, "/");
+    Serial.println("Connecting to Supabase WebSocket...");
+    Serial.print("URL: wss://");
+    Serial.println(SUPABASE_URL);
+    Serial.print("Path: ");
+    Serial.println(WEBSOCKET_PATH);
+
+    // Try SSL connection with insecure mode
+    webSocket.beginSSL(SUPABASE_URL, 443, WEBSOCKET_PATH);
     webSocket.onEvent(webSocketEvent);
+
+    // Set authorization header for Supabase
+    webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY);
+
+    // Disable SSL certificate verification
+    webSocket.setInsecure();
   }
 
   Serial.println("========== After Setup End ==========");
@@ -417,10 +441,32 @@ void loop() {
   }
 
   // Send heartbeat and data
-  if (websocketConnected && millis() - lastHeartbeat > 10000) { // Every 10 seconds
-    sendSensorData();
-    lastHeartbeat = millis();
-    Serial.println("💓 Heartbeat sent");
+  if (websocketConnected) {
+    // Send ping every 30 seconds to keep connection alive
+    static unsigned long lastPing = 0;
+    if (millis() - lastPing > 30000) {
+      sendPing();
+      lastPing = millis();
+    }
+
+    // Send sensor data every 60 seconds (less frequent now that we have pings)
+    if (millis() - lastHeartbeat > 60000) {
+      sendSensorData();
+      lastHeartbeat = millis();
+      Serial.println("💓 Heartbeat sent");
+    }
+  }
+
+  // Reconnect WebSocket if disconnected
+  if (!websocketConnected && WiFi.status() == WL_CONNECTED) {
+    static unsigned long lastReconnectAttempt = 0;
+    if (millis() - lastReconnectAttempt > 5000) { // Try to reconnect every 5 seconds
+      Serial.println("🔄 Attempting WebSocket reconnection...");
+      webSocket.beginSSL(SUPABASE_URL, 443, WEBSOCKET_PATH);
+      webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY);
+      webSocket.setInsecure(); // Disable SSL certificate verification
+      lastReconnectAttempt = millis();
+    }
   }
 
   // Reconnect WiFi if disconnected

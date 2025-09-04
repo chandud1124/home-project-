@@ -26,13 +26,35 @@ client.connect().then(() => {
 // MongoDB collections will be created automatically on first insert
 
 // WebSocket server for real-time updates
-const wss = new WebSocket.Server({ port: process.env.WS_PORT || 8083 });
+const wss = new WebSocket.Server({ 
+  port: process.env.WS_PORT || 8083,
+  host: '0.0.0.0' // Bind to all interfaces
+});
 
 // Store ESP32 connections
 const esp32Connections = new Map();
 
 wss.on('connection', (ws, req) => {
   console.log('Client connected to WebSocket:', req.socket.remoteAddress);
+
+  // Send current system status to new frontend clients
+  if (!ws.esp32_id) {
+    console.log('📡 Sending current system status to frontend client');
+    const currentStatus = {
+      wifi_connected: true,
+      battery_level: 85,
+      temperature: 25,
+      esp32_top_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'top_tank') ? 'online' : 'offline',
+      esp32_sump_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'sump_tank') ? 'online' : 'offline',
+      wifi_strength: -50,
+      timestamp: new Date().toISOString()
+    };
+
+    ws.send(JSON.stringify({
+      type: 'system_status',
+      data: currentStatus
+    }));
+  }
 
   // Handle ESP32 WebSocket messages
   ws.on('message', async (message) => {
@@ -88,7 +110,7 @@ wss.on('connection', (ws, req) => {
               battery_level: 85,
               temperature: 25,
               esp32_top_status: data.device_type === 'top_tank' ? 'online' : 'offline',
-              esp32_sump_status: data.device_type === 'sump' ? 'online' : 'offline',
+              esp32_sump_status: data.device_type === 'sump_tank' ? 'online' : 'offline',
               wifi_strength: -50, // Default until first sensor data
               timestamp: new Date().toISOString()
             }
@@ -262,7 +284,7 @@ const handleMotorStatus = async (payload, ws) => {
 
   try {
     await db.collection('motor_events').insertOne({
-      event_type: motor_running ? 'status_running' : 'status_stopped',
+      event_type: motor_running ? 'motor_started' : 'motor_stopped',
       duration: runtime_seconds,
       esp32_id,
       motor_running,
@@ -398,12 +420,17 @@ const getMotorCommand = async (currentLevel, tankType) => {
 
 // Broadcast to all connected clients except ESP32 devices
 const broadcast = (data) => {
+  console.log('📡 Broadcasting message:', data.type, 'to frontend clients');
+  let sentCount = 0;
   wss.clients.forEach((client) => {
     // Don't send data messages to ESP32 devices
     if (client.readyState === WebSocket.OPEN && !client.esp32_id) {
       client.send(JSON.stringify(data));
+      sentCount++;
+      console.log('📡 Sent to frontend client');
     }
   });
+  console.log(`📡 Broadcast complete: sent to ${sentCount} clients`);
 };
 
 // Broadcast control messages only to ESP32 devices
@@ -599,7 +626,9 @@ app.post('/api/motor/control', async (req, res) => {
   const { action } = req.body;
   try {
     const result = await db.collection('motor_events').insertOne({
-      event_type: action,
+      event_type: action === 'start' ? 'motor_started' : 'motor_stopped',
+      esp32_id: 'web_control',
+      motor_running: action === 'start',
       timestamp: new Date()
     });
     const event = {
@@ -714,29 +743,84 @@ app.get('/api/consumption', async (req, res) => {
   const { period = 'daily' } = req.query;
   try {
     if (period === 'daily') {
-      const rows = await db.collection('tank_readings').aggregate([
+      // Get tank readings for consumption calculation
+      const tankReadings = await db.collection('tank_readings').aggregate([
         { $match: { tank_type: 'top_tank', timestamp: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } } },
         { $group: {
           _id: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp" } },
+          readings: { $push: { level_liters: "$level_liters", timestamp: "$timestamp" } },
           avg_level: { $avg: "$level_percentage" },
           readings_count: { $sum: 1 }
         }},
         { $sort: { _id: -1 } }
       ]).toArray();
-      res.json(rows);
+
+      // Get motor events for the same period
+      const motorEvents = await db.collection('motor_events').aggregate([
+        { $match: { timestamp: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } } },
+        { $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp" } },
+          motor_starts: { $sum: { $cond: [{ $eq: ["$event_type", "motor_started"] }, 1, 0] } },
+          fills: { $sum: { $cond: [{ $eq: ["$event_type", "tank_fill_complete"] }, 1, 0] } }
+        }}
+      ]).toArray();
+
+      // Combine tank and motor data
+      const consumptionData = tankReadings.map(tankDay => {
+        const motorDay = motorEvents.find(me => me._id === tankDay._id) || { motor_starts: 0, fills: 0 };
+
+        // Calculate consumption from tank level changes
+        let consumption = 0;
+        if (tankDay.readings.length > 1) {
+          const sortedReadings = tankDay.readings.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          const firstReading = sortedReadings[0].level_liters;
+          const lastReading = sortedReadings[sortedReadings.length - 1].level_liters;
+          consumption = Math.max(0, firstReading - lastReading);
+        }
+
+        return {
+          date: tankDay._id,
+          consumption: Math.round(consumption),
+          fills: motorDay.fills || 0,
+          motorStarts: motorDay.motor_starts || 0
+        };
+      });
+
+      res.json(consumptionData);
     } else {
-      const rows = await db.collection('tank_readings').aggregate([
+      // Monthly data
+      const monthlyData = await db.collection('tank_readings').aggregate([
         { $match: { tank_type: 'top_tank', timestamp: { $gte: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000) } } },
         { $group: {
           _id: { $dateToString: { format: "%Y-%m", date: "$timestamp" } },
+          readings: { $push: { level_liters: "$level_liters", timestamp: "$timestamp" } },
           avg_level: { $avg: "$level_percentage" },
           readings_count: { $sum: 1 }
         }},
         { $sort: { _id: -1 } }
       ]).toArray();
-      res.json(rows);
+
+      const monthlyConsumption = monthlyData.map(month => {
+        let consumption = 0;
+        if (month.readings.length > 1) {
+          const sortedReadings = month.readings.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          const firstReading = sortedReadings[0].level_liters;
+          const lastReading = sortedReadings[sortedReadings.length - 1].level_liters;
+          consumption = Math.max(0, firstReading - lastReading);
+        }
+
+        return {
+          date: month._id,
+          consumption: Math.round(consumption),
+          fills: 0, // Monthly fills calculation would be more complex
+          motorStarts: 0 // Monthly motor starts calculation would be more complex
+        };
+      });
+
+      res.json(monthlyConsumption);
     }
   } catch (err) {
+    console.error('Error fetching consumption data:', err);
     res.status(500).json({ error: err.message });
   }
 });

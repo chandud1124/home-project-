@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,41 +13,45 @@ serve(async (req) => {
   }
 
   try {
-    // Initialize Supabase client
+    // Initialize Supabase client with service role key to bypass RLS
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      {
-        global: {
-          headers: { Authorization: req.headers.get('Authorization')! },
-        },
-      }
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
     const url = new URL(req.url)
-    const path = url.pathname.replace('/functions/v1/api', '')
-
+    const pathname = url.pathname
+    console.log(`Full URL: ${req.url}`)
+    console.log(`Pathname: ${pathname}`)
+    
+    // Extract path after /functions/v1/api
+    const apiPrefix = '/functions/v1/api'
+    let path = '/'
+    if (pathname.startsWith(apiPrefix)) {
+      const remaining = pathname.substring(apiPrefix.length)
+      path = remaining || '/'
+    }
+    
+    console.log(`Extracted path: ${path}`)
     console.log(`Request: ${req.method} ${path}`)
 
     // Route handling
-    switch (path) {
-      case '/tanks':
-        return await handleTanks(supabaseClient, req)
-      case '/motor-events':
-        return await handleMotorEvents(supabaseClient, req)
-      case '/consumption/daily':
-        return await handleConsumption(supabaseClient, req, 'daily')
-      case '/consumption/monthly':
-        return await handleConsumption(supabaseClient, req, 'monthly')
-      case '/alerts':
-        return await handleAlerts(supabaseClient, req)
-      case '/system-status':
-        return await handleSystemStatus(supabaseClient, req)
-      default:
-        return new Response(JSON.stringify({ error: 'Not found' }), {
-          status: 404,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+    if (pathname.includes('/tanks')) {
+      return await handleTanks(supabaseClient, req)
+    } else if (pathname.includes('/motor-events')) {
+      return await handleMotorEvents(supabaseClient, req)
+    } else if (pathname.includes('/consumption/daily')) {
+      return await handleConsumption(supabaseClient, req, 'daily')
+    } else if (pathname.includes('/consumption/monthly')) {
+      return await handleConsumption(supabaseClient, req, 'monthly')
+    } else if (pathname.includes('/alerts')) {
+      return await handleAlerts(supabaseClient, req)
+    } else if (pathname.includes('/system-status')) {
+      return await handleSystemStatus(supabaseClient, req)
+    } else {
+      return new Response(JSON.stringify({ message: 'API is working', endpoints: ['/tanks', '/motor-events', '/alerts', '/system-status', '/consumption/daily', '/consumption/monthly'], pathname: pathname }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
   } catch (error) {
     console.error('Error:', error)
@@ -149,7 +153,7 @@ async function handleConsumption(supabaseClient, req, period) {
     if (error) throw error
 
     // Process data for consumption calculation
-    const consumptionData = []
+    const consumptionData: Array<{date: string, consumption: number, timestamp: string}> = []
     const dailyMap = new Map()
 
     data.forEach(reading => {

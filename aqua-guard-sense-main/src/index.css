@@ -1,4 +1,7 @@
 
+/* Tailwind CSS imports and utilities */
+/* Note: @tailwind and @apply directives are Tailwind CSS syntax and are expected in this file */
+
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 @tailwind base;
@@ -55,10 +58,12 @@
   }
 
   * {
+    /* @apply directive applies Tailwind utility classes */
     @apply border-border;
   }
 
   body {
+    /* @apply directive applies Tailwind utility classes */
     @apply bg-background text-foreground font-sans antialiased;
     font-family: 'Inter', system-ui, sans-serif;
   }
@@ -77,24 +82,231 @@
   50% { box-shadow: 0 0 20px hsl(var(--accent)), 0 0 30px hsl(var(--accent)); }
 }
 
-@keyframes tank-fill {
+/* Enhanced water animations for realistic filling effects */
+@keyframes water-fill {
+  0% {
+    height: 0%;
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  100% {
+    height: var(--fill-level);
+    opacity: 1;
+  }
+}
+
+@keyframes water-wave {
+  0%, 100% {
+    transform: translateX(0) scaleY(1);
+  }
+  25% {
+    transform: translateX(-2px) scaleY(1.02);
+  }
+  50% {
+    transform: translateX(2px) scaleY(0.98);
+  }
+  75% {
+    transform: translateX(-1px) scaleY(1.01);
+  }
+}
+
+@keyframes water-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
+}
+
+@keyframes water-bubbles {
+  0% {
+    transform: translateY(100%) scale(0);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-20px) scale(1);
+    opacity: 0;
+  }
+}
+
+@keyframes tank-fill-smooth {
   0% { height: 0%; }
   100% { height: var(--fill-level); }
 }
 
-.animate-water-flow {
-  animation: water-flow 3s ease-in-out infinite;
+/* Mobile Performance Optimizations */
+@media (max-width: 768px) {
+  /* Disable or reduce complex animations on mobile */
+  .animate-water-wave {
+    animation: none;
+  }
+
+  .animate-water-ripple {
+    animation: none;
+  }
+
+  .animate-water-bubbles {
+    animation: none;
+  }
+
+  .animate-water-filling {
+    animation: water-filling-mobile 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  .animate-water-draining {
+    animation: water-draining-mobile 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  .animate-water-fill {
+    animation: water-fill-mobile 1s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  /* Reduce backdrop blur on mobile for better performance */
+  .backdrop-blur-sm {
+    backdrop-filter: blur(2px);
+  }
+
+  .backdrop-blur-md {
+    backdrop-filter: blur(4px);
+  }
+
+  /* Disable transform animations that can cause repaints */
+  .animate-pulse {
+    animation: none;
+  }
+
+  /* Simplify transitions on mobile */
+  * {
+    transition-duration: 0.2s !important;
+  }
 }
 
-.animate-pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
+/* Mobile-optimized keyframes with reduced complexity */
+@keyframes water-fill-mobile {
+  0% {
+    height: 0%;
+    opacity: 0.9;
+  }
+  100% {
+    height: var(--fill-level);
+    opacity: 1;
+  }
 }
 
-.animate-tank-fill {
-  animation: tank-fill 2s ease-out forwards;
+@keyframes water-filling-mobile {
+  0% {
+    height: var(--previous-level);
+    opacity: 0.95;
+  }
+  100% {
+    height: var(--fill-level);
+    opacity: 1;
+  }
+}
+
+@keyframes water-draining-mobile {
+  0% {
+    height: var(--previous-level);
+    opacity: 1;
+  }
+  100% {
+    height: var(--fill-level);
+    opacity: 0.95;
+  }
+}
+
+.animate-water-fill {
+  animation: water-fill 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-water-wave {
+  animation: water-wave 4s ease-in-out infinite;
+}
+
+.animate-water-ripple {
+  animation: water-ripple 2s ease-out infinite;
+}
+
+.animate-water-bubbles {
+  animation: water-bubbles 3s ease-out infinite;
+}
+
+.animate-tank-fill-smooth {
+  animation: tank-fill-smooth 2s ease-out forwards;
+}
+
+/* Water flow direction indicators */
+@keyframes water-filling {
+  0% {
+    height: var(--previous-level);
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 20px hsl(var(--primary));
+  }
+  100% {
+    height: var(--fill-level);
+    opacity: 1;
+    box-shadow: 0 0 10px hsl(var(--primary));
+  }
+}
+
+@keyframes water-draining {
+  0% {
+    height: var(--previous-level);
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.95;
+    box-shadow: 0 0 15px hsl(var(--warning));
+  }
+  100% {
+    height: var(--fill-level);
+    opacity: 0.9;
+  }
+}
+
+@keyframes water-surface-shimmer {
+  0%, 100% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+}
+
+.animate-water-filling {
+  animation: water-filling 1.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-water-draining {
+  animation: water-draining 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-surface-shimmer {
+  animation: water-surface-shimmer 3s ease-in-out infinite;
+  background: linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%);
+  background-size: 200% 200%;
 }
 
 /* Utility classes for monitoring system */
+/* @apply directives apply Tailwind utility classes */
 .status-indicator {
   @apply w-3 h-3 rounded-full animate-pulse;
 }
@@ -120,7 +332,80 @@
   @apply bg-gray-500 text-white;
 }
 
-.motor-error {
-  @apply bg-red-500 text-white;
-  animation: pulse-glow 1s ease-in-out infinite;
+/* Mobile Performance Optimizations */
+@media (max-width: 768px) {
+  /* Reduce motion for better mobile performance */
+  *, *::before, *::after {
+    animation-duration: 0.3s !important;
+    animation-delay: -0.3s !important;
+    transition-duration: 0.2s !important;
+  }
+
+  /* Disable heavy backdrop blur on mobile */
+  .backdrop-blur-xl {
+    backdrop-filter: blur(4px);
+  }
+
+  .backdrop-blur-sm {
+    backdrop-filter: blur(2px);
+  }
+
+  /* Reduce blur effects on mobile */
+  .blur-3xl {
+    filter: blur(16px);
+  }
+
+  .blur-xl {
+    filter: blur(8px);
+  }
+
+  /* Optimize card backgrounds for mobile */
+  .bg-card\/60 {
+    background-color: hsl(var(--card) / 0.8);
+  }
+
+  .bg-card\/30 {
+    background-color: hsl(var(--card) / 0.5);
+  }
+}
+
+/* Touch-friendly interactions */
+@media (hover: none) and (pointer: coarse) {
+  /* Remove hover effects on touch devices */
+  .hover\:bg-card\/80:hover {
+    background-color: hsl(var(--card) / 0.6);
+  }
+
+  /* Ensure minimum touch target sizes */
+  button:not([role="switch"]), .cursor-pointer:not([role="switch"]) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Mobile scrolling optimizations */
+@media (max-width: 768px) {
+  /* Smooth scrolling for mobile */
+  html {
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prevent horizontal scroll */
+  body {
+    overflow-x: hidden;
+  }
+
+  /* Optimize text rendering on mobile */
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Reduce layout shift */
+  img, video, canvas, iframe {
+    max-width: 100%;
+    height: auto;
+  }
 }

@@ -13,7 +13,7 @@ import { useToast } from "@/components/ui/use-toast";
 interface AlertRule {
   id: string;
   name: string;
-  condition: 'level_below' | 'level_above' | 'motor_runtime' | 'sensor_offline' | 'power_failure';
+  condition: 'level_below' | 'level_above' | 'motor_runtime' | 'sensor_offline';
   threshold: number;
   tankType: 'top_tank' | 'sump' | 'both';
   enabled: boolean;
@@ -68,8 +68,7 @@ export const AlertConfiguration = () => {
     level_below: 'Water level below (%)',
     level_above: 'Water level above (%)',
     motor_runtime: 'Motor runtime exceeds (minutes)',
-    sensor_offline: 'Sensor offline for (seconds)',
-    power_failure: 'Power failure detected'
+    sensor_offline: 'Sensor offline for (seconds)'
   };
 
   const createNewRule = (): AlertRule => ({
@@ -147,8 +146,7 @@ export const AlertConfiguration = () => {
                   <h3 className="font-semibold text-foreground">{rule.name}</h3>
                   <p className="text-sm text-muted-foreground">
                     {conditionLabels[rule.condition]}: {rule.threshold}
-                    {rule.condition === 'power_failure' ? '' : 
-                     rule.condition.includes('level') ? '%' : 
+                    {rule.condition.includes('level') ? '%' : 
                      rule.condition === 'motor_runtime' ? ' min' : ' sec'}
                   </p>
                 </div>
@@ -217,7 +215,6 @@ export const AlertConfiguration = () => {
                     <SelectItem value="level_above">Water level above</SelectItem>
                     <SelectItem value="motor_runtime">Motor runtime exceeds</SelectItem>
                     <SelectItem value="sensor_offline">Sensor offline</SelectItem>
-                    <SelectItem value="power_failure">Power failure</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

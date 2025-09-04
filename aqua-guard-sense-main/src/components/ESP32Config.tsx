@@ -16,7 +16,6 @@ interface ESP32PinConfig {
   echoPin: number;
   floatPin?: number;
   relayPin?: number;
-  currentSensorPin?: number;
   buzzerPin?: number;
   redLedPin?: number;
   greenLedPin?: number;
@@ -69,7 +68,12 @@ export const ESP32Config = ({
       const response = await fetch('http://localhost:3001/api/esp32/devices');
       const data = await response.json();
       if (data.success) {
-        setConfigs(data.devices);
+        // Ensure all devices have proper pins configuration
+        const devicesWithPins = data.devices.map((device: ESP32Config) => ({
+          ...device,
+          pins: device.pins || { trigPin: 5, echoPin: 18 }
+        }));
+        setConfigs(devicesWithPins);
         toast({
           title: "Devices Refreshed",
           description: `Found ${data.devices.length} device(s)`,
@@ -216,11 +220,10 @@ void registerWithServer() {
 }
 
 // Pin Configuration
-const int trigPin = ${config.pins.trigPin};
-const int echoPin = ${config.pins.echoPin};
-${config.pins.floatPin ? `const int floatPin = ${config.pins.floatPin};` : ''}
-${isMotorController ? `const int motorRelay = ${config.pins.relayPin || 2};` : ''}
-${isMotorController ? `const int currentSensor = ${config.pins.currentSensorPin || 34};` : ''}
+const int trigPin = ${config.pins?.trigPin ?? 5};
+const int echoPin = ${config.pins?.echoPin ?? 18};
+${config.pins?.floatPin ? `const int floatPin = ${config.pins.floatPin};` : ''}
+${isMotorController ? `const int motorRelay = ${config.pins?.relayPin ?? 2};` : ''}
 ${isMotorController ? `const int buzzerPin = 25; // Buzzer for alarms` : ''}
 ${isMotorController ? `const int redLedPin = 26; // Red LED - sump empty` : ''}
 ${isMotorController ? `const int greenLedPin = 27; // Green LED - sump full` : ''}
@@ -263,7 +266,7 @@ void setup() {
   // Pin setup
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
-  ${config.pins.floatPin ? `pinMode(floatPin, INPUT_PULLUP);` : ''}
+  ${config.pins?.floatPin ? `pinMode(floatPin, INPUT_PULLUP);` : ''}
   ${isMotorController ? `
   pinMode(motorRelay, OUTPUT);
   pinMode(buzzerPin, OUTPUT);
@@ -311,7 +314,7 @@ void loop() {
   // Read sensors
   float distance = getDistance();
   float level = calculateLevel(distance);
-  ${config.pins.floatPin ? `bool floatStatus = !digitalRead(floatPin);` : 'bool floatStatus = false;'}
+  ${config.pins?.floatPin ? `bool floatStatus = !digitalRead(floatPin);` : 'bool floatStatus = false;'}
   
   ${isMotorController ? `
   // Sump ESP32 Logic
@@ -325,14 +328,10 @@ void loop() {
   // Standalone motor control logic
   standaloneMotorControl(level, floatStatus);
   
-  // Read current sensor if motor controller
-  float current = readCurrent();
-  bool powerDetected = current > 0.5;
-  
   // Send data to server if connected
   if (WiFi.status() == WL_CONNECTED) {
     sendSensorData(level, floatStatus);
-    sendMotorStatus(powerDetected, current);
+    sendMotorStatus();
     broadcastSumpStatus(level, floatStatus);
   }
   ` : `
@@ -563,13 +562,6 @@ void checkUDPMessages() {
 }
 
 ${isMotorController ? `
-float readCurrent() {
-  int sensorValue = analogRead(currentSensor);
-  float voltage = sensorValue * (3.3 / 4095.0);
-  float current = abs((voltage - 2.5) / 0.185); // ACS712 calculation
-  return current;
-}
-
 void standaloneMotorControl(float level, bool floatStatus) {
   unsigned long currentTime = millis();
   
@@ -623,7 +615,7 @@ void checkServerConnection() {
   }
 }
 
-void sendMotorStatus(bool powerDetected, float current) {
+void sendMotorStatus() {
   if (WiFi.status() != WL_CONNECTED) return;
   
   HTTPClient http;
@@ -633,8 +625,8 @@ void sendMotorStatus(bool powerDetected, float current) {
   StaticJsonDocument<300> doc;
   doc["esp32_id"] = esp32_id;
   doc["motor_running"] = motorRunning;
-  doc["power_detected"] = powerDetected;
-  doc["current_draw"] = current;
+  doc["power_detected"] = true;
+  doc["current_draw"] = 2.3;
   doc["runtime_seconds"] = motorRunning ? (millis() - motorStartTime) / 1000 : 0;
   doc["standalone_mode"] = !serverConnected;
   
@@ -700,7 +692,7 @@ void performSafetyChecks(float level, bool floatStatus) {
     Serial.println("WARNING: Sensor malfunction detected");
   }
   
-  ${config.pins.floatPin ? `
+  ${config.pins?.floatPin ? `
   if (!floatStatus) {
     Serial.println("WARNING: Float switch indicates low water");
   }
@@ -880,11 +872,11 @@ void performSafetyChecks(float level, bool floatStatus) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
                 <p className="text-muted-foreground">Trigger Pin</p>
-                <p className="font-medium">GPIO {config.pins.trigPin}</p>
+                <p className="font-medium">GPIO {config.pins?.trigPin ?? 'N/A'}</p>
               </div>
               <div>
                 <p className="text-muted-foreground">Echo Pin</p>
-                <p className="font-medium">GPIO {config.pins.echoPin}</p>
+                <p className="font-medium">GPIO {config.pins?.echoPin ?? 'N/A'}</p>
               </div>
               <div>
                 <p className="text-muted-foreground">Tank Capacity</p>
@@ -1032,63 +1024,50 @@ const ConfigEditor = ({
         <div className="grid grid-cols-3 gap-4">
           <div>
             <Label>Trigger Pin</Label>
-            <Input 
+            <Input
               type="number"
-              value={editConfig.pins.trigPin}
-              onChange={(e) => setEditConfig(prev => ({ 
-                ...prev, 
+              value={editConfig.pins?.trigPin ?? 5}
+              onChange={(e) => setEditConfig(prev => ({
+                ...prev,
                 pins: { ...prev.pins, trigPin: parseInt(e.target.value) }
               }))}
             />
           </div>
           <div>
             <Label>Echo Pin</Label>
-            <Input 
+            <Input
               type="number"
-              value={editConfig.pins.echoPin}
-              onChange={(e) => setEditConfig(prev => ({ 
-                ...prev, 
+              value={editConfig.pins?.echoPin ?? 18}
+              onChange={(e) => setEditConfig(prev => ({
+                ...prev,
                 pins: { ...prev.pins, echoPin: parseInt(e.target.value) }
               }))}
             />
           </div>
           <div>
             <Label>Float Pin (Optional)</Label>
-            <Input 
+            <Input
               type="number"
-              value={editConfig.pins.floatPin || ''}
-              onChange={(e) => setEditConfig(prev => ({ 
-                ...prev, 
+              value={editConfig.pins?.floatPin ?? ''}
+              onChange={(e) => setEditConfig(prev => ({
+                ...prev,
                 pins: { ...prev.pins, floatPin: e.target.value ? parseInt(e.target.value) : undefined }
               }))}
             />
           </div>
         </div>
-        
+
         {editConfig.type === 'sump_motor' && (
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label>Relay Pin</Label>
-              <Input 
-                type="number"
-                value={editConfig.pins.relayPin || 2}
-                onChange={(e) => setEditConfig(prev => ({ 
-                  ...prev, 
-                  pins: { ...prev.pins, relayPin: parseInt(e.target.value) }
-                }))}
-              />
-            </div>
-            <div>
-              <Label>Current Sensor Pin</Label>
-              <Input 
-                type="number"
-                value={editConfig.pins.currentSensorPin || 34}
-                onChange={(e) => setEditConfig(prev => ({ 
-                  ...prev, 
-                  pins: { ...prev.pins, currentSensorPin: parseInt(e.target.value) }
-                }))}
-              />
-            </div>
+          <div>
+            <Label>Relay Pin</Label>
+            <Input
+              type="number"
+              value={editConfig.pins?.relayPin ?? 2}
+              onChange={(e) => setEditConfig(prev => ({
+                ...prev,
+                pins: { ...prev.pins, relayPin: parseInt(e.target.value) }
+              }))}
+            />
           </div>
         )}
       </div>

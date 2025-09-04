@@ -161,16 +161,21 @@ class ESP32Controller {
     };
     try {
       await this.db.collection('motor_events').insertOne({
-        event_type: motor_running ? 'status_running' : 'status_stopped',
+        event_type: motor_running ? 'motor_started' : 'motor_stopped',
         duration: runtime_seconds,
+        esp32_id: esp32_id,
+        motor_running: motor_running,
+        power_detected: power_detected,
+        current_draw: current_draw,
         timestamp: new Date()
       });
       this.broadcast({ 
         type: 'motor_status', 
         data: {
-          isRunning: motor_running,
-          powerDetected: power_detected,
-          currentDraw: current_draw,
+          esp32_id: esp32_id,
+          motor_running: motor_running,
+          power_detected: power_detected,
+          current_draw: current_draw,
           runtime: runtime_seconds,
           timestamp: new Date().toISOString()
         }

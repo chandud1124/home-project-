@@ -8,10 +8,10 @@ import { useState } from "react";
 
 interface AutoMotorControlProps {
   isRunning: boolean;
-  powerDetected: boolean;
   autoMode: boolean;
   currentDraw: number;
   runtime: number;
+  motorStartCount: number;
   onToggleAuto: (enabled: boolean) => void;
   onManualControl: (action: 'start' | 'stop') => void;
   settings: {
@@ -25,10 +25,10 @@ interface AutoMotorControlProps {
 
 export const AutoMotorControl = ({
   isRunning,
-  powerDetected,
   autoMode,
   currentDraw,
   runtime,
+  motorStartCount,
   onToggleAuto,
   onManualControl,
   settings,
@@ -37,17 +37,13 @@ export const AutoMotorControl = ({
   const [showSettings, setShowSettings] = useState(false);
 
   const getMotorStatusColor = () => {
-    if (!powerDetected && isRunning) return 'text-destructive'; // Motor should be running but no power
-    if (isRunning && powerDetected) return 'text-success'; // Running normally
-    if (!isRunning) return 'text-muted-foreground'; // Stopped
-    return 'text-warning'; // Unknown state
+    if (isRunning) return 'text-success'; // Running normally
+    return 'text-muted-foreground'; // Stopped
   };
 
   const getMotorStatusText = () => {
-    if (!powerDetected && isRunning) return 'POWER FAILURE';
-    if (isRunning && powerDetected) return 'RUNNING';
-    if (!isRunning) return 'STOPPED';
-    return 'UNKNOWN';
+    if (isRunning) return 'RUNNING';
+    return 'STOPPED';
   };
 
   return (
@@ -70,21 +66,13 @@ export const AutoMotorControl = ({
       {/* Motor Status Display */}
       <div className="text-center mb-6">
         <div className={`inline-flex items-center gap-3 p-4 rounded-lg border-2 ${
-          isRunning && powerDetected ? 'border-success/20 bg-success/5' : 
-          !powerDetected && isRunning ? 'border-destructive/20 bg-destructive/5' :
-          'border-border/50 bg-muted/20'
+          isRunning ? 'border-success/20 bg-success/5' : 'border-border/50 bg-muted/20'
         }`}>
           <Power className={`w-8 h-8 ${getMotorStatusColor()}`} />
           <div>
             <p className={`text-xl font-bold ${getMotorStatusColor()}`}>
               {getMotorStatusText()}
             </p>
-            {!powerDetected && isRunning && (
-              <div className="flex items-center gap-1 text-destructive text-sm">
-                <AlertTriangle className="w-4 h-4" />
-                <span>No Power Detected!</span>
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -124,7 +112,7 @@ export const AutoMotorControl = ({
       )}
 
       {/* Runtime Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-4 text-center">
+      <div className="grid grid-cols-2 gap-4 mb-4 text-center">
         <div>
           <p className="text-sm text-muted-foreground">Runtime Today</p>
           <p className="text-lg font-bold flex items-center justify-center gap-1 text-foreground">
@@ -133,16 +121,10 @@ export const AutoMotorControl = ({
           </p>
         </div>
         <div>
-          <p className="text-sm text-muted-foreground">Current Draw</p>
+          <p className="text-sm text-muted-foreground">Motor Starts Today</p>
           <p className="text-lg font-bold text-foreground">
-            {currentDraw.toFixed(1)}A
+            {motorStartCount}
           </p>
-        </div>
-        <div>
-          <p className="text-sm text-muted-foreground">Power Status</p>
-          <Badge className={powerDetected ? 'bg-success/10 text-success border-success/20' : 'bg-destructive/10 text-destructive border-destructive/20'}>
-            {powerDetected ? 'DETECTED' : 'NO POWER'}
-          </Badge>
         </div>
       </div>
 

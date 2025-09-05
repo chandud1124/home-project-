@@ -149,6 +149,16 @@ wss.on('connection', (ws, req) => {
           // Handle manual override reset from frontend
           await handleResetManual(data, ws);
           break;
+
+        case 'alert':
+          // Handle alert notifications from ESP32
+          await handleAlertNotification(data, ws);
+          break;
+
+        case 'heartbeat':
+          // Handle heartbeat from ESP32
+          await handleHeartbeat(data, ws);
+          break;
       }
     } catch (error) {
       console.error('Error processing WebSocket message:', error);
@@ -234,6 +244,12 @@ const handleSensorData = async (payload, ws) => {
 
     // Broadcast to frontend clients only (not ESP32)
     broadcast({ type: 'tank_reading', data: reading });
+
+    // Send pong response to ESP32 to acknowledge heartbeat
+    ws.send(JSON.stringify({
+      type: 'pong',
+      timestamp: new Date().toISOString()
+    }));
 
     // Also broadcast system status update to frontend only
     broadcast({
@@ -371,6 +387,95 @@ const handleResetManual = async (data, ws) => {
       }));
     }
   });
+};
+
+// Handle alert notifications from ESP32
+const handleAlertNotification = async (data, ws) => {
+  const {
+    tank_type,
+    esp32_id,
+    alert_type,
+    message,
+    level_percentage,
+    timestamp
+  } = data;
+
+  try {
+    console.log(`🚨 Alert received from ${esp32_id}: ${alert_type} - ${message}`);
+
+    // Store alert in database
+    const alertDoc = {
+      tank_type,
+      esp32_id,
+      alert_type,
+      message,
+      level_percentage,
+      timestamp: new Date(timestamp || Date.now()),
+      acknowledged: false
+    };
+
+    await db.collection('system_alerts').insertOne(alertDoc);
+
+    // Broadcast alert to all frontend clients
+    broadcast({
+      type: 'system_alert',
+      data: {
+        id: alertDoc._id,
+        tank_type,
+        esp32_id,
+        alert_type,
+        message,
+        level_percentage,
+        timestamp: alertDoc.timestamp,
+        acknowledged: false
+      }
+    });
+
+    console.log(`🚨 Alert stored and broadcasted: ${alert_type}`);
+
+  } catch (error) {
+    console.error('Error handling alert notification:', error);
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Failed to process alert notification',
+      timestamp: new Date().toISOString()
+    }));
+  }
+};
+
+// Handle heartbeat from ESP32
+const handleHeartbeat = async (data, ws) => {
+  const { esp32_id, timestamp } = data;
+
+  try {
+    console.log(`💓 Heartbeat received from ${esp32_id}`);
+
+    // Update device last seen
+    await db.collection('esp32_devices').updateOne(
+      { id: esp32_id },
+      { 
+        $set: { 
+          last_seen: new Date(timestamp || Date.now()),
+          status: 'online'
+        } 
+      }
+    );
+
+    // Send pong response to ESP32 to acknowledge heartbeat
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'pong',
+        esp32_id,
+        timestamp: new Date().toISOString(),
+        server_time: new Date().toISOString()
+      }));
+    }
+
+    console.log(`💓 Heartbeat acknowledged for ${esp32_id}`);
+
+  } catch (error) {
+    console.error('Error handling heartbeat:', error);
+  }
 };
 
 // Motor command logic

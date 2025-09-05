@@ -135,8 +135,11 @@ export const WaterAnimationDemo = () => {
               wifiStrength: -45,
               lastSeen: new Date()
             }}
-            floatSwitch={topTankLevel < 20}
-            motorRunning={false}
+            initialMacAddress="6C:C8:40:4D:B8:3C"
+            initialIpAddress="192.168.0.234"
+            onConfigChange={(config) => {
+              console.log('Top Tank ESP32 config updated:', config);
+            }}
           />
 
           <EnhancedTankMonitor
@@ -153,6 +156,11 @@ export const WaterAnimationDemo = () => {
             }}
             floatSwitch={sumpTankLevel > 80}
             motorRunning={topTankLevel < 30 && sumpTankLevel > 20}
+            initialMacAddress="80:F3:DA:65:86:6C"
+            initialIpAddress="192.168.0.184"
+            onConfigChange={(config) => {
+              console.log('Sump Tank ESP32 config updated:', config);
+            }}
           />
         </div>
 

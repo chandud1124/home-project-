@@ -833,13 +833,19 @@ const EnhancedIndex = () => {
                   lastSeen: esp32LastSeen || new Date()
                 }}
                 symbol="🏠"
+                initialMacAddress="6C:C8:40:4D:B8:3C"
+                initialIpAddress="192.168.0.234"
+                onConfigChange={(config) => {
+                  console.log('Top Tank ESP32 config updated:', config);
+                  // Here you can send the config to your backend or handle it as needed
+                }}
               />
             </Card>
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
               <EnhancedTankMonitor
                 title="Sump Tank"
                 currentLevel={sumpTankData.level_percentage}
-                capacity={800}
+                capacity={13225}
                 status={sumpTankData.level_percentage > 80 ? "full" :
                         sumpTankData.level_percentage > 50 ? "normal" :
                         sumpTankData.level_percentage > 20 ? "low" : "critical"}
@@ -853,6 +859,12 @@ const EnhancedIndex = () => {
                 floatSwitch={sumpTankData.float_switch}
                 motorRunning={sumpTankData.motor_running}
                 manualOverride={sumpTankData.manual_override}
+                initialMacAddress="80:F3:DA:65:86:6C"
+                initialIpAddress="192.168.0.184"
+                onConfigChange={(config) => {
+                  console.log('Sump Tank ESP32 config updated:', config);
+                  // Here you can send the config to your backend or handle it as needed
+                }}
               />
             </Card>
           </div>

@@ -251,7 +251,7 @@ const Index = () => {
           insights.push(...schedules);
           
           // Add tank empty prediction
-          const tankPrediction = aiService.predictTankEmpty(totalLiters, 1000); // Assuming 1000L capacity
+          const tankPrediction = aiService.predictTankEmpty(totalLiters, 13225); // Sump tank capacity: 13,225L
           console.log('🤖 AI: Tank prediction:', tankPrediction);
           if (tankPrediction.hoursRemaining > 0) {
             insights.push({
@@ -416,7 +416,7 @@ const Index = () => {
       newInsights.push(...aiService.generateSmartSchedule(new Date().getHours()));
       
       // Add tank empty prediction
-      const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 1000);
+      const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 13225);
       if (tankPrediction.hoursRemaining > 0) {
         newInsights.push({
           id: 'tank-empty-prediction',
@@ -599,15 +599,47 @@ const Index = () => {
 
     apiService.onWebSocketMessage('system_alert', (data) => {
       console.log('🚨 WebSocket system_alert received:', data);
+
+      // Map alert types from ESP32 to UI alert types
+      let alertType: "warning" | "info" | "error" = "info";
+      let alertMessage = data.message;
+
+      // Handle specific ESP32 alert types
+      if (data.alert_type === 'sump_90_percent') {
+        alertType = "warning";
+        alertMessage = `🚨 Sump tank reached 90% capacity (${data.level_percentage?.toFixed(1)}%) - Buzzer activated`;
+      } else if (data.alert_type === 'sump_filled') {
+        alertType = "error";
+        alertMessage = `⚠️ Sump tank is completely filled (${data.level_percentage?.toFixed(1)}%) - Buzzer activated 5 times`;
+      } else if (data.alert_type === 'motor_auto_start') {
+        alertType = "info";
+        alertMessage = `🚰 Motor started automatically - Sump filling, filling top tank`;
+      } else if (data.alert_type === 'motor_auto_stop') {
+        alertType = "info";
+        alertMessage = `🛑 Motor stopped automatically - Top tank is full`;
+      } else if (data.alert_type) {
+        // Handle other alert types
+        alertMessage = `${data.alert_type}: ${data.message}`;
+      }
+
       // Add new alert to the list
       const newAlert: SystemAlert = {
         id: data._id || data.id || Date.now().toString(),
-        type: data.type as "warning" | "info" | "error",
-        message: data.message,
+        type: alertType,
+        message: alertMessage,
         timestamp: new Date(data.timestamp),
         resolved: data.resolved || false
       };
       setAlerts(prev => [newAlert, ...prev]);
+
+      // Show toast notification for critical alerts
+      if (alertType === "error" || alertType === "warning") {
+        toast({
+          title: "System Alert",
+          description: alertMessage,
+          variant: alertType === "error" ? "destructive" : "default",
+        });
+      }
     });
 
     // Handle manual override status updates
@@ -1138,18 +1170,28 @@ const Index = () => {
                 esp32Status={esp32TopStatus}
                 symbol="🏠"
                 onRequestEsp32Connect={requestPinForEsp32Connect}
+                initialMacAddress="6C:C8:40:4D:B8:3C"
+                initialIpAddress="192.168.0.234"
+                onConfigChange={(config) => {
+                  console.log('Top Tank ESP32 config updated:', config);
+                }}
               />
             </Card>
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
               <EnhancedTankMonitor
                 title="Sump Tank"
                 currentLevel={45}
-                capacity={800}
+                capacity={13225}
                 status="low"
                 sensorHealth="online"
                 esp32Status={esp32SumpStatus}
                 symbol="🕳️"
                 onRequestEsp32Connect={requestPinForEsp32Connect}
+                initialMacAddress="80:F3:DA:65:86:6C"
+                initialIpAddress="192.168.0.184"
+                onConfigChange={(config) => {
+                  console.log('Sump Tank ESP32 config updated:', config);
+                }}
               />
             </Card>
           </div>

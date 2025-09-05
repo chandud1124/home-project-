@@ -5,7 +5,9 @@ import {
   AlertTriangle, 
   AlertCircle, 
   CheckCircle2, 
-  XCircle 
+  XCircle,
+  Volume2,
+  Zap
 } from "lucide-react";
 
 interface SystemAlert {
@@ -22,7 +24,16 @@ interface SystemAlertsProps {
 }
 
 export const SystemAlerts = ({ alerts, className }: SystemAlertsProps) => {
-  const getAlertIcon = (type: string) => {
+  const getAlertIcon = (type: string, message?: string) => {
+    // Check for buzzer-related alerts
+    if (message?.includes('Buzzer activated')) {
+      return <Volume2 className="w-3 h-3 sm:w-4 sm:h-4 text-orange-500" />;
+    }
+    // Check for motor control alerts
+    if (message?.includes('Motor started') || message?.includes('Motor stopped')) {
+      return <Zap className="w-3 h-3 sm:w-4 sm:h-4 text-blue-500" />;
+    }
+
     switch(type) {
       case 'success': return <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" />;
       case 'warning': return <AlertTriangle className="w-3 h-3 sm:w-4 sm:h-4" />;
@@ -64,7 +75,7 @@ export const SystemAlerts = ({ alerts, className }: SystemAlertsProps) => {
               variant={getAlertVariant(alert.type)}
               className={`${alert.resolved ? 'opacity-50' : ''} p-3 sm:p-4`}
             >
-              {getAlertIcon(alert.type)}
+              {getAlertIcon(alert.type, alert.message)}
               <AlertDescription className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
                 <span className="flex-1 text-xs sm:text-sm mb-2 sm:mb-0">{alert.message}</span>
                 <div className="flex items-center gap-2">

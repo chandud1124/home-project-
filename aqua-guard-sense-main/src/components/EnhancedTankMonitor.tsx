@@ -18,12 +18,19 @@ interface EnhancedTankMonitorProps {
     connected: boolean;
     wifiStrength: number;
     lastSeen: Date;
+    connectionState?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable';
+    backendResponsive?: boolean;
+    heartbeatMissed?: number;
+    uptime?: number;
   };
   symbol: '🏠' | '🕳️';
   floatSwitch?: boolean;
   motorRunning?: boolean;
   manualOverride?: boolean;
   onRequestEsp32Connect?: (deviceName: string, onSuccess: () => void) => void;
+  initialMacAddress?: string;
+  initialIpAddress?: string;
+  onConfigChange?: (config: { macAddress: string; ipAddress: string }) => void;
 }
 
 export const EnhancedTankMonitor = ({ 
@@ -37,15 +44,47 @@ export const EnhancedTankMonitor = ({
   floatSwitch,
   motorRunning,
   manualOverride,
-  onRequestEsp32Connect
+  onRequestEsp32Connect,
+  initialMacAddress,
+  initialIpAddress,
+  onConfigChange
 }: EnhancedTankMonitorProps) => {
-  const [esp32Config, setEsp32Config] = useState({
-    macAddress: '80:F3:DA:65:47:38',
-    ipAddress: '192.168.0.132'
-  });
+  // Load configuration from localStorage or use props/defaults
+  const getInitialConfig = () => {
+    const stored = localStorage.getItem(`esp32-config-${title}`);
+    if (stored) {
+      try {
+        return JSON.parse(stored);
+      } catch (e) {
+        console.warn('Invalid stored ESP32 config, using defaults');
+      }
+    }
+    return {
+      macAddress: initialMacAddress || '80:F3:DA:65:86:6C',
+      ipAddress: initialIpAddress || '192.168.0.184'
+    };
+  };
+
+  const [esp32Config, setEsp32Config] = useState(getInitialConfig);
   const [isConnecting, setIsConnecting] = useState(false);
   const [previousLevel, setPreviousLevel] = useState(currentLevel);
   const [flowDirection, setFlowDirection] = useState<'filling' | 'draining' | 'stable'>('stable');
+
+  // Save configuration to localStorage and notify parent when config changes
+  useEffect(() => {
+    localStorage.setItem(`esp32-config-${title}`, JSON.stringify(esp32Config));
+    if (onConfigChange) {
+      onConfigChange(esp32Config);
+    }
+  }, [esp32Config, title, onConfigChange]);
+
+  // Handle configuration updates with validation
+  const handleConfigUpdate = (field: 'macAddress' | 'ipAddress', value: string) => {
+    setEsp32Config(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
 
   const currentLiters = Math.round((currentLevel / 100) * capacity);
 
@@ -103,6 +142,26 @@ export const EnhancedTankMonitor = ({
     }
   };
 
+  const getConnectionStateIcon = (state?: string) => {
+    switch(state) {
+      case 'stable': return <CheckCircle className="w-4 h-4 text-success" />;
+      case 'connected': return <CheckCircle className="w-4 h-4 text-success" />;
+      case 'connecting': return <Wifi className="w-4 h-4 text-warning animate-pulse" />;
+      case 'reconnecting': return <AlertTriangle className="w-4 h-4 text-warning animate-pulse" />;
+      default: return <AlertTriangle className="w-4 h-4 text-destructive" />;
+    }
+  };
+
+  const getConnectionStateText = (state?: string) => {
+    switch(state) {
+      case 'stable': return 'Stable Connection';
+      case 'connected': return 'Connected';
+      case 'connecting': return 'Connecting...';
+      case 'reconnecting': return 'Reconnecting...';
+      default: return 'Disconnected';
+    }
+  };
+
   const handleConnectEsp32 = () => {
     if (onRequestEsp32Connect) {
       onRequestEsp32Connect(title, () => {
@@ -152,6 +211,21 @@ export const EnhancedTankMonitor = ({
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <Wifi className={`w-3 h-3 ${esp32Status.connected ? 'text-success' : 'text-destructive'}`} />
             <span>WiFi: {esp32Status.wifiStrength}dBm</span>
+            {esp32Status.connectionState && (
+              <>
+                <span className="mx-1">•</span>
+                {getConnectionStateIcon(esp32Status.connectionState)}
+                <span className={`text-xs ${
+                  esp32Status.connectionState === 'stable' ? 'text-success' :
+                  esp32Status.connectionState === 'connected' ? 'text-success' :
+                  esp32Status.connectionState === 'connecting' ? 'text-warning' :
+                  esp32Status.connectionState === 'reconnecting' ? 'text-warning' :
+                  'text-destructive'
+                }`}>
+                  {esp32Status.connectionState}
+                </span>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -252,11 +326,14 @@ export const EnhancedTankMonitor = ({
 
       {/* ESP32 Status & Connection */}
       <div className="mt-4 pt-4 border-t border-border/50">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Zap className={`w-4 h-4 ${esp32Status.connected ? 'text-success' : 'text-destructive'}`} />
-            <span className={`text-sm ${esp32Status.connected ? 'text-success' : 'text-destructive'}`}>
-              {esp32Status.connected ? 'Connected' : 'Disconnected'}
+            {getConnectionStateIcon(esp32Status.connectionState)}
+            <span className={`text-sm font-medium ${
+              esp32Status.connectionState === 'stable' ? 'text-success' :
+              esp32Status.connected ? 'text-success' : 'text-destructive'
+            }`}>
+              {getConnectionStateText(esp32Status.connectionState)}
             </span>
           </div>
           
@@ -280,7 +357,7 @@ export const EnhancedTankMonitor = ({
                   <Input
                     id="mac"
                     value={esp32Config.macAddress}
-                    onChange={(e) => setEsp32Config(prev => ({ ...prev, macAddress: e.target.value }))}
+                    onChange={(e) => handleConfigUpdate('macAddress', e.target.value)}
                     placeholder="AA:BB:CC:DD:EE:FF"
                     className="bg-background border-border text-foreground"
                   />
@@ -290,7 +367,7 @@ export const EnhancedTankMonitor = ({
                   <Input
                     id="ip"
                     value={esp32Config.ipAddress}
-                    onChange={(e) => setEsp32Config(prev => ({ ...prev, ipAddress: e.target.value }))}
+                    onChange={(e) => handleConfigUpdate('ipAddress', e.target.value)}
                     placeholder="192.168.1.100"
                     className="bg-background border-border text-foreground"
                   />
@@ -312,10 +389,70 @@ export const EnhancedTankMonitor = ({
           </Dialog>
         </div>
         
+        {/* Connection Details */}
+        <div className="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
+          <div>
+            <span className="font-medium">WiFi:</span> {esp32Status.wifiStrength}dBm
+          </div>
+          <div>
+            <span className="font-medium">Backend:</span> 
+            <span className={esp32Status.backendResponsive ? 'text-success' : 'text-destructive'}>
+              {esp32Status.backendResponsive ? 'Responsive' : 'Unresponsive'}
+            </span>
+          </div>
+          {esp32Status.uptime && (
+            <>
+              <div>
+                <span className="font-medium">Uptime:</span> {Math.floor(esp32Status.uptime / 3600000)}h {Math.floor((esp32Status.uptime % 3600000) / 60000)}m
+              </div>
+              <div>
+                <span className="font-medium">Stability:</span> 
+                <span className="text-success">Crash-only restart</span>
+              </div>
+            </>
+          )}
+        </div>
+        
         {esp32Status.lastSeen && (
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground mt-2">
             Last seen: {esp32Status.lastSeen.toLocaleTimeString()}
           </p>
+        )}
+        
+        {/* Connection Stability Info */}
+        {esp32Status.connectionState === 'stable' && (
+          <div className="mt-2 p-2 bg-success/10 rounded-md border border-success/20">
+            <p className="text-xs text-success font-medium flex items-center gap-1">
+              <CheckCircle className="w-3 h-3" />
+              Stable Connection - No restart needed
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              ESP32 maintains connection indefinitely. Only restarts on crashes or panic mode.
+            </p>
+          </div>
+        )}
+        
+        {esp32Status.connectionState === 'reconnecting' && (
+          <div className="mt-2 p-2 bg-warning/10 rounded-md border border-warning/20">
+            <p className="text-xs text-warning font-medium flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              Smart Reconnection Active
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Using exponential backoff. No forced restart for connection issues.
+            </p>
+          </div>
+        )}
+        
+        {esp32Status.heartbeatMissed && esp32Status.heartbeatMissed > 0 && (
+          <div className="mt-2 p-2 bg-warning/10 rounded-md border border-warning/20">
+            <p className="text-xs text-warning font-medium">
+              ⚠️ Heartbeat missed: {esp32Status.heartbeatMissed} times
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Backend responsiveness monitoring active. No auto-restart.
+            </p>
+          </div>
         )}
       </div>
     </Card>

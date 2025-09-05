@@ -72,15 +72,6 @@ WebSocket connected!
 
 ## 📁 Files Overview
 
-### **ESP32_TopTank_Enhanced.ino**
-- **Purpose**: Controls the top water tank monitoring
-- **Sensors**: Ultrasonic sensor only
-- **Features**:
-  - WiFi/WebSocket communication
-  - Single-sensor water level monitoring
-  - Real-time data transmission to backend
-  - Heartbeat monitoring
-
 ### **ESP32_SumpTank_Enhanced.ino**
 - **Purpose**: Controls the sump tank and motor management
 - **Sensors**: Ultrasonic sensor + Float switch (dual verification)
@@ -91,16 +82,19 @@ WebSocket connected!
   - Manual override button
   - Alarm system with buzzer and LED
   - Motor safety timeouts
+  - Enhanced connection management (no unnecessary restarts)
+  - Crash-only restart policy
 
-### **ESP32_Enhanced_Configuration.md**
-- Detailed configuration guide for ESP32 setup
-- Pin configurations and hardware requirements
-- WiFi and communication settings
-
-### **ESP32_Integration_Guide.md**
-- Integration guide for connecting ESP32 devices
-- Backend communication protocols
-- Troubleshooting and debugging information
+### **ESP32_TopTank_Monitor.ino**
+- **Purpose**: Monitors top tank water levels and sends motor commands to sump tank
+- **Sensors**: Ultrasonic sensor only
+- **Features**:
+  - WiFi/WebSocket communication
+  - Real-time water level monitoring
+  - Motor command transmission to sump ESP32
+  - Alert system for top tank levels
+  - Enhanced connection management
+  - HTTP communication with sump tank ESP32
 
 ## 🔧 Hardware Requirements
 

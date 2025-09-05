@@ -1,29 +1,32 @@
 const express = require('express');
 const cors = require('cors');
 const WebSocket = require('ws');
-const { MongoClient, ObjectId } = require('mongodb');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 const bodyParser = require('body-parser');
 const ESP32Controller = require('./esp32-enhanced-routes');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// Initialize MongoDB client
-const mongoUri = process.env.MONGODB_URI;
-const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
-let db;
+// Initialize Supabase client
+const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co';
+const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4';
 
-client.connect().then(() => {
-  db = client.db();
-  console.log('Connected to MongoDB');
+const supabase = createClient(supabaseUrl, supabaseKey);
+let dbConnected = false;
+
+// Test Supabase connection
+supabase.from('test').select('*').limit(1).then(() => {
+  dbConnected = true;
+  console.log('Connected to Supabase');
+}).catch(err => {
+  console.error('Failed to connect to Supabase:', err);
 });
-
-// MongoDB collections will be created automatically on first insert
 
 // WebSocket server for real-time updates
 const wss = new WebSocket.Server({ 
@@ -80,23 +83,29 @@ wss.on('connection', (ws, req) => {
           ws.deviceInfo = deviceInfo;
 
           // Store device information in database
-          try {
-            await db.collection('esp32_devices').updateOne(
-              { id: data.esp32_id },
-              {
-                $set: {
+          if (dbConnected) {
+            try {
+              const { error } = await supabase
+                .from('esp32_devices')
+                .upsert({
+                  id: data.esp32_id,
                   ...deviceInfo,
-                  last_seen: new Date(),
+                  last_seen: new Date().toISOString(),
                   status: 'online'
-                },
-                $setOnInsert: {
-                  created_at: new Date()
-                }
-              },
-              { upsert: true }
-            );
-          } catch (dbError) {
-            console.error('Error storing device info:', dbError);
+                }, {
+                  onConflict: 'id'
+                });
+
+              if (error) {
+                console.error('Error storing device info:', error);
+              } else {
+                console.log(`Device ${data.esp32_id} registered in Supabase`);
+              }
+            } catch (dbError) {
+              console.error('Error storing device info:', dbError);
+            }
+          } else {
+            console.log('Database not connected yet, skipping device storage');
           }
 
           console.log(`ESP32 ${data.esp32_id} registered from ${clientIP}`);
@@ -109,8 +118,8 @@ wss.on('connection', (ws, req) => {
               wifi_connected: true,
               battery_level: 85,
               temperature: 25,
-              esp32_top_status: data.device_type === 'top_tank' ? 'online' : 'offline',
-              esp32_sump_status: data.device_type === 'sump_tank' ? 'online' : 'offline',
+              esp32_top_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'top_tank') ? 'online' : 'offline',
+              esp32_sump_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'sump_tank') ? 'online' : 'offline',
               wifi_strength: -50, // Default until first sensor data
               timestamp: new Date().toISOString()
             }
@@ -173,16 +182,16 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     if (ws.esp32_id) {
       // Update device status to offline
-      db.collection('esp32_devices').updateOne(
-        { id: ws.esp32_id },
-        { 
-          $set: { 
-            status: 'offline',
-            last_seen: new Date()
-          } 
-        }
-      ).catch(err => console.error('Error updating device status:', err));
-      
+      supabase
+        .from('esp32_devices')
+        .update({
+          status: 'offline',
+          last_seen: new Date().toISOString()
+        })
+        .eq('id', ws.esp32_id)
+        .then(() => {})
+        .catch(err => console.error('Error updating device status:', err));
+
       esp32Connections.delete(ws.esp32_id);
       console.log(`ESP32 ${ws.esp32_id} disconnected`);
     } else {
@@ -211,24 +220,90 @@ const handleSensorData = async (payload, ws) => {
     auto_mode_enabled
   } = payload;
 
-  try {
-    const result = await db.collection('tank_readings').insertOne({
-      tank_type,
-      level_percentage,
-      level_liters,
-      sensor_health,
-      esp32_id,
-      battery_voltage,
-      signal_strength,
-      float_switch,
-      motor_running,
-      manual_override,
-      auto_mode_enabled,
-      timestamp: new Date()
-    });
+  if (dbConnected) {
+    try {
+      const { data, error } = await supabase
+        .from('tank_readings')
+        .insert({
+          tank_type,
+          level_percentage,
+          level_liters,
+          sensor_health,
+          esp32_id,
+          battery_voltage,
+          signal_strength,
+          float_switch,
+          motor_running,
+          manual_override,
+          auto_mode_enabled,
+          timestamp: new Date().toISOString()
+        })
+        .select();
 
+      if (error) {
+        console.error('Error storing tank reading:', error);
+      } else {
+        console.log(`Tank reading stored for ${tank_type}: ${level_percentage}%`);
+      }
+
+      const reading = {
+        id: data?.[0]?.id,
+        tank_type,
+        level_percentage,
+        level_liters,
+        sensor_health,
+        esp32_id,
+        signal_strength,
+        float_switch,
+        motor_running,
+        manual_override,
+        auto_mode_enabled,
+        timestamp: new Date().toISOString()
+      };
+
+      // Broadcast to frontend clients only (not ESP32)
+      broadcast({ type: 'tank_reading', data: reading });
+
+      // Send pong response to ESP32 to acknowledge heartbeat
+      ws.send(JSON.stringify({
+        type: 'pong',
+        timestamp: new Date().toISOString()
+      }));
+
+      // Also broadcast system status update to frontend only
+      broadcast({
+        type: 'system_status',
+        data: {
+          wifi_connected: true,
+          battery_level: 85, // ESP32 doesn't have battery, use default
+          temperature: 25,
+          esp32_top_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'top_tank') ? 'online' : 'offline',
+          esp32_sump_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'sump_tank') ? 'online' : 'offline',
+          wifi_strength: payload.signal_strength || -50,
+          float_switch: payload.float_switch,
+          motor_running: payload.motor_running,
+          manual_override: payload.manual_override,
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      // Send motor command to specific ESP32 device
+      const motorCommand = await getMotorCommand(level_percentage, tank_type);
+      if (motorCommand.command !== 'maintain') {
+        broadcastToESP32(motorCommand.esp32_id, {
+          type: 'motor_command',
+          command: motorCommand,
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (error) {
+      console.error('Error handling sensor data:', error);
+    }
+  } else {
+    console.log('Database not connected yet, processing sensor data without storage');
+    
+    // Still broadcast the data even if database is not connected
     const reading = {
-      id: result.insertedId,
       tank_type,
       level_percentage,
       level_liters,
@@ -250,41 +325,6 @@ const handleSensorData = async (payload, ws) => {
       type: 'pong',
       timestamp: new Date().toISOString()
     }));
-
-    // Also broadcast system status update to frontend only
-    broadcast({
-      type: 'system_status',
-      data: {
-        wifi_connected: true,
-        battery_level: 85, // ESP32 doesn't have battery, use default
-        temperature: 25,
-        esp32_top_status: payload.esp32_id.includes('TOP') ? 'online' : 'offline',
-        esp32_sump_status: payload.esp32_id.includes('SUMP') ? 'online' : 'offline',
-        wifi_strength: payload.signal_strength || -50,
-        float_switch: payload.float_switch,
-        motor_running: payload.motor_running,
-        manual_override: payload.manual_override,
-        timestamp: new Date().toISOString()
-      }
-    });
-
-    // Send motor command to specific ESP32 device
-    const motorCommand = await getMotorCommand(level_percentage, tank_type);
-    if (motorCommand.command !== 'maintain') {
-      broadcastToESP32(motorCommand.esp32_id, {
-        type: 'motor_command',
-        command: motorCommand,
-        timestamp: new Date().toISOString()
-      });
-    }
-
-  } catch (error) {
-    console.error('Error handling sensor data:', error);
-    ws.send(JSON.stringify({
-      type: 'error',
-      message: 'Failed to process sensor data',
-      timestamp: new Date().toISOString()
-    }));
   }
 };
 
@@ -299,15 +339,23 @@ const handleMotorStatus = async (payload, ws) => {
   } = payload;
 
   try {
-    await db.collection('motor_events').insertOne({
-      event_type: motor_running ? 'motor_started' : 'motor_stopped',
-      duration: runtime_seconds,
-      esp32_id,
-      motor_running,
-      power_detected,
-      current_draw,
-      timestamp: new Date()
-    });
+    const { error } = await supabase
+      .from('motor_events')
+      .insert({
+        event_type: motor_running ? 'motor_started' : 'motor_stopped',
+        duration: runtime_seconds,
+        esp32_id,
+        motor_running,
+        power_detected,
+        current_draw,
+        timestamp: new Date().toISOString()
+      });
+
+    if (error) {
+      console.error('Error storing motor event:', error);
+    } else {
+      console.log(`Motor event stored: ${motor_running ? 'started' : 'stopped'} for ${esp32_id}`);
+    }
 
     // Broadcast motor status to frontend only
     broadcast({
@@ -410,11 +458,19 @@ const handleAlertNotification = async (data, ws) => {
       alert_type,
       message,
       level_percentage,
-      timestamp: new Date(timestamp || Date.now()),
+      timestamp: new Date(timestamp || Date.now()).toISOString(),
       acknowledged: false
     };
 
-    await db.collection('system_alerts').insertOne(alertDoc);
+    const { error } = await supabase
+      .from('alerts')
+      .insert(alertDoc);
+
+    if (error) {
+      console.error('Error storing system alert:', error);
+    } else {
+      console.log(`System alert stored: ${alert_type} for ${esp32_id}`);
+    }
 
     // Broadcast alert to all frontend clients
     broadcast({
@@ -451,15 +507,13 @@ const handleHeartbeat = async (data, ws) => {
     console.log(`💓 Heartbeat received from ${esp32_id}`);
 
     // Update device last seen
-    await db.collection('esp32_devices').updateOne(
-      { id: esp32_id },
-      { 
-        $set: { 
-          last_seen: new Date(timestamp || Date.now()),
-          status: 'online'
-        } 
-      }
-    );
+    await supabase
+      .from('esp32_devices')
+      .update({
+        last_seen: new Date(timestamp || Date.now()).toISOString(),
+        status: 'online'
+      })
+      .eq('id', esp32_id);
 
     // Send pong response to ESP32 to acknowledge heartbeat
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -482,40 +536,52 @@ const handleHeartbeat = async (data, ws) => {
 const getMotorCommand = async (currentLevel, tankType) => {
   try {
     // Get latest readings from both tanks
-    const [topTank] = await db.collection('tank_readings')
-      .find({ tank_type: 'main' })
-      .sort({ timestamp: -1 })
-      .limit(1)
-      .toArray();
+    const { data: topTankData } = await supabase
+      .from('tank_readings')
+      .select('*')
+      .in('tank_type', ['top_tank', 'main'])
+      .order('timestamp', { ascending: false })
+      .limit(1);
 
-    const [sumpTank] = await db.collection('tank_readings')
-      .find({ tank_type: 'sump' })
-      .sort({ timestamp: -1 })
-      .limit(1)
-      .toArray();
+    const { data: sumpTankData } = await supabase
+      .from('tank_readings')
+      .select('*')
+      .in('tank_type', ['sump_tank', 'sump'])
+      .order('timestamp', { ascending: false })
+      .limit(1);
+
+    const topTank = topTankData?.[0];
+    const sumpTank = sumpTankData?.[0];
 
     const topLevel = topTank ? topTank.level_percentage : 50;
     const sumpLevel = sumpTank ? sumpTank.level_percentage : 50;
 
+    console.log(`🔄 Motor logic check - Top: ${topLevel}%, Sump: ${sumpLevel}%, Current tank: ${tankType}`);
+
     // Auto mode logic based on tank type
-    if (tankType === 'main') {
-      // Main tank logic
+    if (tankType === 'top_tank' || tankType === 'main') {
+      // Top tank logic - start when low and sump has water
       if (topLevel < 20 && sumpLevel > 30) {
-        return { command: 'start', reason: 'auto_fill_low_main_tank', esp32_id: 'ESP32_SUMP_001' };
+        console.log('🚀 Starting motor: Top tank low, sump has water');
+        return { command: 'start', reason: 'auto_fill_low_top_tank', esp32_id: 'ESP32_SUMP_002' };
       }
       if (topLevel > 90 || sumpLevel < 20) {
-        return { command: 'stop', reason: 'safety_cutoff_main_tank', esp32_id: 'ESP32_SUMP_001' };
+        console.log('🛑 Stopping motor: Top tank full or sump low');
+        return { command: 'stop', reason: 'safety_cutoff_top_tank', esp32_id: 'ESP32_SUMP_002' };
       }
-    } else if (tankType === 'sump') {
-      // Sump tank logic
+    } else if (tankType === 'sump_tank' || tankType === 'sump') {
+      // Sump tank logic - start when low and top has water
       if (sumpLevel < 20 && topLevel > 30) {
-        return { command: 'start', reason: 'auto_fill_low_sump_tank', esp32_id: 'ESP32_SUMP_001' };
+        console.log('🚀 Starting motor: Sump tank low, top has water');
+        return { command: 'start', reason: 'auto_fill_low_sump_tank', esp32_id: 'ESP32_SUMP_002' };
       }
       if (sumpLevel > 90) {
-        return { command: 'stop', reason: 'safety_cutoff_sump_full', esp32_id: 'ESP32_SUMP_001' };
+        console.log('🛑 Stopping motor: Sump tank full');
+        return { command: 'stop', reason: 'safety_cutoff_sump_full', esp32_id: 'ESP32_SUMP_002' };
       }
     }
 
+    console.log('⏸️ Maintaining current motor state');
     return { command: 'maintain', reason: 'normal_operation' };
   } catch (error) {
     console.error('Error in getMotorCommand:', error);
@@ -547,7 +613,7 @@ const broadcastToESP32 = (esp32_id, data) => {
 };
 
 // Initialize ESP32 controller
-const esp32Controller = new ESP32Controller(db, broadcast);
+const esp32Controller = new ESP32Controller(supabase, broadcast);
 
 // ESP32 API Routes - Enhanced
 app.post('/api/esp32/sensor-data', (req, res) => esp32Controller.handleSensorData(req, res));
@@ -562,17 +628,25 @@ app.get('/api/esp32/device-status', (req, res) => esp32Controller.getDeviceStatu
 app.post('/api/esp32/devices', async (req, res) => {
   try {
     const deviceConfig = req.body;
-    const result = await db.collection('esp32_devices').insertOne({
-      ...deviceConfig,
-      createdAt: new Date(),
-      lastUpdated: new Date(),
-      status: 'configured'
-    });
-    res.json({ 
-      success: true, 
-      deviceId: result.insertedId,
-      message: 'Device configuration saved successfully'
-    });
+    const { data, error } = await supabase
+      .from('esp32_devices')
+      .insert({
+        ...deviceConfig,
+        created_at: new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+        status: 'configured'
+      })
+      .select();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.json({
+        success: true,
+        deviceId: data?.[0]?.id,
+        message: 'Device configuration saved successfully'
+      });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -582,48 +656,52 @@ app.post('/api/esp32/devices', async (req, res) => {
 app.post('/api/esp32/register', async (req, res) => {
   try {
     const { esp32_id, mac_address, device_type, ip_address, firmware_version } = req.body;
-    
+
     // Check for duplicate MAC address (only if MAC is provided and not 'Unknown')
     if (mac_address && mac_address !== 'Unknown') {
-      const existingDevice = await db.collection('esp32_devices').findOne({ 
-        mac_address: mac_address,
-        id: { $ne: esp32_id } // Exclude current device
-      });
-      
-      if (existingDevice) {
-        return res.status(409).json({ 
-          success: false, 
-          error: 'MAC address already registered to another device' 
+      const { data: existingDevices, error: checkError } = await supabase
+        .from('esp32_devices')
+        .select('id')
+        .eq('mac_address', mac_address)
+        .neq('id', esp32_id);
+
+      if (checkError) {
+        return res.status(500).json({ error: checkError.message });
+      }
+
+      if (existingDevices && existingDevices.length > 0) {
+        return res.status(409).json({
+          success: false,
+          error: 'MAC address already registered to another device'
         });
       }
     }
-    
+
     // Update or insert device registration
-    const result = await db.collection('esp32_devices').updateOne(
-      { id: esp32_id },
-      {
-        $set: {
-          id: esp32_id,
-          mac_address,
-          ip_address,
-          device_type,
-          firmware_version,
-          registered_at: new Date(),
-          last_seen: new Date(),
-          status: 'online'
-        },
-        $setOnInsert: {
-          created_at: new Date()
-        }
-      },
-      { upsert: true }
-    );
-    
-    res.json({ 
-      success: true, 
-      message: 'Device registered successfully',
-      device_id: esp32_id
-    });
+    const { error } = await supabase
+      .from('esp32_devices')
+      .upsert({
+        id: esp32_id,
+        mac_address,
+        ip_address,
+        device_type,
+        firmware_version,
+        registered_at: new Date().toISOString(),
+        last_seen: new Date().toISOString(),
+        status: 'online'
+      }, {
+        onConflict: 'id'
+      });
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.json({
+        success: true,
+        message: 'Device registered successfully',
+        device_id: esp32_id
+      });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -631,21 +709,28 @@ app.post('/api/esp32/register', async (req, res) => {
 
 app.get('/api/esp32/devices', async (req, res) => {
   try {
-    const devices = await db.collection('esp32_devices').find({}).toArray();
+    const { data: devices, error } = await supabase
+      .from('esp32_devices')
+      .select('*')
+      .order('last_seen', { ascending: false });
 
-    // Enhance with real-time connection status
-    const enhancedDevices = devices.map(device => {
-      const connection = esp32Connections.get(device.id);
-      return {
-        ...device,
-        is_connected: !!connection,
-        current_ip: connection?.ip_address || device.ip_address,
-        last_seen: connection ? new Date() : device.last_seen,
-        status: connection ? 'online' : (device.status || 'offline')
-      };
-    });
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      // Enhance with real-time connection status
+      const enhancedDevices = devices.map(device => {
+        const connection = esp32Connections.get(device.id);
+        return {
+          ...device,
+          is_connected: !!connection,
+          current_ip: connection?.ip_address || device.ip_address,
+          last_seen: connection ? new Date().toISOString() : device.last_seen,
+          status: connection ? 'online' : (device.status || 'offline')
+        };
+      });
 
-    res.json({ success: true, devices: enhancedDevices });
+      res.json({ success: true, devices: enhancedDevices });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -655,16 +740,19 @@ app.put('/api/esp32/devices/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    await db.collection('esp32_devices').updateOne(
-      { _id: new ObjectId(id) },
-      { 
-        $set: { 
-          ...updates, 
-          lastUpdated: new Date() 
-        } 
-      }
-    );
-    res.json({ success: true, message: 'Device configuration updated successfully' });
+    const { error } = await supabase
+      .from('esp32_devices')
+      .update({
+        ...updates,
+        last_updated: new Date().toISOString()
+      })
+      .eq('id', id);
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.json({ success: true, message: 'Device configuration updated successfully' });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -673,8 +761,16 @@ app.put('/api/esp32/devices/:id', async (req, res) => {
 app.delete('/api/esp32/devices/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    await db.collection('esp32_devices').deleteOne({ _id: new ObjectId(id) });
-    res.json({ success: true, message: 'Device configuration deleted successfully' });
+    const { error } = await supabase
+      .from('esp32_devices')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.json({ success: true, message: 'Device configuration deleted successfully' });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -685,18 +781,29 @@ app.delete('/api/esp32/devices/:id', async (req, res) => {
 // Get current tank levels
 app.get('/api/tanks', async (req, res) => {
   try {
-    const tanks = await db.collection('tank_readings').aggregate([
-      {
-        $sort: { timestamp: -1 }
-      },
-      {
-        $group: {
-          _id: "$tank_type",
-          doc: { $first: "$$ROOT" }
-        }
-      }
-    ]).toArray();
-    res.json(tanks.map(t => t.doc));
+    // Get the latest reading for each tank type
+    const { data: topTankData, error: topError } = await supabase
+      .from('tank_readings')
+      .select('*')
+      .eq('tank_type', 'top_tank')
+      .order('timestamp', { ascending: false })
+      .limit(1);
+
+    const { data: sumpTankData, error: sumpError } = await supabase
+      .from('tank_readings')
+      .select('*')
+      .eq('tank_type', 'sump_tank')
+      .order('timestamp', { ascending: false })
+      .limit(1);
+
+    if (topError || sumpError) {
+      res.status(500).json({ error: 'Database query error' });
+    } else {
+      const tanks = [];
+      if (topTankData && topTankData.length > 0) tanks.push(topTankData[0]);
+      if (sumpTankData && sumpTankData.length > 0) tanks.push(sumpTankData[0]);
+      res.json(tanks);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -706,21 +813,23 @@ app.get('/api/tanks', async (req, res) => {
 app.post('/api/tanks/reading', async (req, res) => {
   const { tank_type, level_percentage, level_liters } = req.body;
   try {
-    const result = await db.collection('tank_readings').insertOne({
-      tank_type,
-      level_percentage,
-      level_liters,
-      timestamp: new Date()
-    });
-    const reading = {
-      _id: result.insertedId,
-      tank_type,
-      level_percentage,
-      level_liters,
-      timestamp: new Date().toISOString()
-    };
-    broadcast({ type: 'tank_reading', data: reading });
-    res.json(reading);
+    const { data, error } = await supabase
+      .from('tank_readings')
+      .insert({
+        tank_type,
+        level_percentage,
+        level_liters,
+        timestamp: new Date().toISOString()
+      })
+      .select();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      const reading = data[0];
+      broadcast({ type: 'tank_reading', data: reading });
+      res.json(reading);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -730,19 +839,27 @@ app.post('/api/tanks/reading', async (req, res) => {
 app.post('/api/motor/control', async (req, res) => {
   const { action } = req.body;
   try {
-    const result = await db.collection('motor_events').insertOne({
-      event_type: action === 'start' ? 'motor_started' : 'motor_stopped',
-      esp32_id: 'web_control',
-      motor_running: action === 'start',
-      timestamp: new Date()
-    });
-    const event = {
-      _id: result.insertedId,
-      event_type: action,
-      timestamp: new Date().toISOString()
-    };
-    broadcast({ type: 'motor_event', data: event });
-    res.json({ success: true, event });
+    const { data, error } = await supabase
+      .from('motor_events')
+      .insert({
+        event_type: action === 'start' ? 'motor_started' : 'motor_stopped',
+        esp32_id: 'web_control',
+        motor_running: action === 'start',
+        timestamp: new Date().toISOString()
+      })
+      .select();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      const event = {
+        id: data[0].id,
+        event_type: action,
+        timestamp: new Date().toISOString()
+      };
+      broadcast({ type: 'motor_event', data: event });
+      res.json({ success: true, event });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -751,8 +868,17 @@ app.post('/api/motor/control', async (req, res) => {
 // Get motor events
 app.get('/api/motor/events', async (req, res) => {
   try {
-    const events = await db.collection('motor_events').find({}).sort({ timestamp: -1 }).limit(50).toArray();
-    res.json(events);
+    const { data: events, error } = await supabase
+      .from('motor_events')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.json(events);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -761,8 +887,17 @@ app.get('/api/motor/events', async (req, res) => {
 // Get system alerts
 app.get('/api/alerts', async (req, res) => {
   try {
-    const alerts = await db.collection('system_alerts').find({}).sort({ timestamp: -1 }).limit(20).toArray();
-    res.json(alerts);
+    const { data: alerts, error } = await supabase
+      .from('alerts')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .limit(20);
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.json(alerts);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -772,21 +907,24 @@ app.get('/api/alerts', async (req, res) => {
 app.post('/api/alerts', async (req, res) => {
   const { type, message } = req.body;
   try {
-    const result = await db.collection('system_alerts').insertOne({
-      type,
-      message,
-      resolved: false,
-      timestamp: new Date()
-    });
-    const alert = {
-      _id: result.insertedId,
-      type,
-      message,
-      resolved: false,
-      timestamp: new Date().toISOString()
-    };
-    broadcast({ type: 'system_alert', data: alert });
-    res.json(alert);
+    const { data, error } = await supabase
+      .from('alerts')
+      .insert({
+        type,
+        title: message,
+        message,
+        resolved: false,
+        timestamp: new Date().toISOString()
+      })
+      .select();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      const alert = data[0];
+      broadcast({ type: 'system_alert', data: alert });
+      res.json(alert);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -796,25 +934,25 @@ app.post('/api/alerts', async (req, res) => {
 app.post('/api/system/status', async (req, res) => {
   const { wifi_connected, battery_level, temperature, esp32_top_status, esp32_sump_status } = req.body;
   try {
-    const result = await db.collection('system_status').insertOne({
-      wifi_connected,
-      battery_level,
-      temperature,
-      esp32_top_status,
-      esp32_sump_status,
-      timestamp: new Date()
-    });
-    const status = {
-      _id: result.insertedId,
-      wifi_connected,
-      battery_level,
-      temperature,
-      esp32_top_status,
-      esp32_sump_status,
-      timestamp: new Date().toISOString()
-    };
-    broadcast({ type: 'system_status', data: status });
-    res.json(status);
+    const { data, error } = await supabase
+      .from('system_status')
+      .insert({
+        wifi_connected,
+        battery_level,
+        temperature,
+        esp32_top_status,
+        esp32_sump_status,
+        timestamp: new Date().toISOString()
+      })
+      .select();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else {
+      const status = data[0];
+      broadcast({ type: 'system_status', data: status });
+      res.json(status);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -823,8 +961,15 @@ app.post('/api/system/status', async (req, res) => {
 // Get latest system status
 app.get('/api/system/status', async (req, res) => {
   try {
-    const status = await db.collection('system_status').find({}).sort({ timestamp: -1 }).limit(1).toArray();
-    if (status[0]) {
+    const { data: status, error } = await supabase
+      .from('system_status')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+    } else if (status && status.length > 0) {
       res.json(status[0]);
     } else {
       // Return default status when no data exists

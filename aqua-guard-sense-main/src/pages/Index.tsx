@@ -9,6 +9,8 @@ import { AIInsightsPanel } from "@/components/AIInsightsPanel";
 import { PinModal } from "@/components/PinModal";
 import { PinSettings } from "@/components/PinSettings";
 import { ESP32Config } from "@/components/ESP32Config";
+import { useIsMobile } from "@/hooks/use-mobile";
+import MobileDashboard from "@/components/MobileDashboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -69,8 +71,13 @@ const Index = () => {
   const [dailyUsage, setDailyUsage] = useState<number>(0);
   const [efficiency, setEfficiency] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Tank level percentages (separate from volume in liters)
+  const [sumpLevelPercentage, setSumpLevelPercentage] = useState<number>(45); // Default to 45%
+  const [topLevelPercentage, setTopLevelPercentage] = useState<number>(75);  // Default to 75%
 
   // Motor data state
+  const [sumpMotorRunning, setSumpMotorRunning] = useState(false);
   const [motorRuntime, setMotorRuntime] = useState<number>(0);
   const [motorCurrentDraw, setMotorCurrentDraw] = useState<number>(0);
   const [motorStartCount, setMotorStartCount] = useState<number>(0);
@@ -79,6 +86,9 @@ const Index = () => {
   const [aiInsights, setAiInsights] = useState<AIInsight[]>([]);
   const [queryResponse, setQueryResponse] = useState<string>('');
   const [consumptionHistory, setConsumptionHistory] = useState<ConsumptionData[]>([]);
+
+  // WebSocket connection state
+  const [wsConnected, setWsConnected] = useState<boolean>(false);
 
   // Debug: Log AI insights changes
   useEffect(() => {
@@ -116,30 +126,90 @@ const Index = () => {
 
         // Fetch tank data for total water level
         const tanks = await apiService.getTanks();
-        const totalLiters = tanks.length > 0 ? tanks.reduce((sum, tank) => sum + tank.level_liters, 0) : 0;
-        setTotalWaterLevel(totalLiters);
-
-        // Calculate water level change (will be 0 if no historical data)
-        setWaterLevelChange(totalLiters > 0 ? 5.2 : 0); // This would be calculated from historical data
-
-        // Fetch motor events for motor status
-        const motorEvents = await apiService.getMotorEvents();
-        if (motorEvents.length > 0) {
-          const lastEvent = motorEvents[motorEvents.length - 1];
-          const lastRunTime = new Date(lastEvent.timestamp);
-          const timeDiff = Date.now() - lastRunTime.getTime();
-          const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60));
+        
+        // Process the tank data for both UI updates and total calculations
+        if (tanks.length > 0) {
+          const totalLiters = tanks.reduce((sum, tank) => sum + tank.level_liters, 0);
+          setTotalWaterLevel(totalLiters);
           
-          if (lastEvent.event_type === 'motor_started') {
-            setMotorStatus('Running');
-            setMotorLastRun('Currently running');
-          } else {
-            setMotorStatus('Stopped');
-            setMotorLastRun(`${hoursAgo}h ago`);
+          // Update the individual tank percentages from the retrieved data
+          const sumpTank = tanks.find(tank => tank.tank_type === 'sump_tank' || tank.tank_type === 'sump');
+          const topTank = tanks.find(tank => tank.tank_type === 'top_tank' || tank.tank_type === 'top');
+          
+          if (sumpTank) {
+            console.log('📊 Setting sump tank level from API:', sumpTank.level_percentage);
+            setSumpLevelPercentage(sumpTank.level_percentage);
+          }
+          
+          if (topTank) {
+            console.log('📊 Setting top tank level from API:', topTank.level_percentage);
+            setTopLevelPercentage(topTank.level_percentage);
           }
         } else {
-          setMotorStatus('No Data');
-          setMotorLastRun('No motor events available');
+          // If no tanks returned, check for cached values
+          const cachedReadings = apiService.getLastKnownTankReadings();
+          console.log('📊 No tanks from API, using cached values:', cachedReadings);
+          
+          // Set from cached values
+          setSumpLevelPercentage(cachedReadings.sump_tank.level_percentage);
+          setTopLevelPercentage(cachedReadings.top_tank.level_percentage);
+          
+          // Estimate total liters from percentages
+          const estimatedSumpLiters = 13225 * (cachedReadings.sump_tank.level_percentage / 100);
+          const estimatedTopLiters = 1000 * (cachedReadings.top_tank.level_percentage / 100);
+          const totalLiters = estimatedSumpLiters + estimatedTopLiters;
+          setTotalWaterLevel(totalLiters);
+        }
+
+        // Calculate water level change (will be 0 if no historical data)
+        setWaterLevelChange(totalWaterLevel > 0 ? 5.2 : 0); // This would be calculated from historical data
+
+        // Fetch motor events for historical data
+        const motorEvents = await apiService.getMotorEvents();
+        
+        // This logic is flawed and will be replaced.
+        // The new logic will prioritize real-time status from getTanks()
+        // and use motor events only for historical "last run" text.
+        
+        // Correctly set motor status from tank data
+        const sumpTank = tanks.find(tank => tank.tank_type === 'sump_tank' || tank.tank_type === 'sump');
+        let isMotorRunning = false;
+        if (sumpTank && sumpTank.motor_running !== undefined) {
+          isMotorRunning = sumpTank.motor_running;
+        } else {
+          // Fallback to cached data if not in tank payload
+          const cached = apiService.getLastKnownTankReadings('sump_tank');
+          isMotorRunning = cached.motor_running || false;
+        }
+        
+        setMotorStatus(isMotorRunning ? 'Running' : 'Stopped');
+        setSumpMotorRunning(isMotorRunning);
+
+        // Determine 'last run' text
+        if (isMotorRunning) {
+          setMotorLastRun('Currently running');
+        } else {
+          if (motorEvents.length > 0) {
+            const lastStopEvent = [...motorEvents].reverse().find(e => e.event_type === 'motor_stopped');
+            if (lastStopEvent) {
+              const lastRunTime = new Date(lastStopEvent.timestamp);
+              const timeDiff = Date.now() - lastRunTime.getTime();
+              const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60));
+              const daysAgo = Math.floor(hoursAgo / 24);
+
+              if (hoursAgo < 1) {
+                setMotorLastRun('Within the hour');
+              } else if (hoursAgo < 24) {
+                setMotorLastRun(`${hoursAgo}h ago`);
+              } else {
+                setMotorLastRun(`${daysAgo}d ago`);
+              }
+            } else {
+              setMotorLastRun('N/A');
+            }
+          } else {
+            setMotorLastRun('No motor events');
+          }
         }
 
         // Calculate motor runtime and start count from motor events
@@ -251,7 +321,7 @@ const Index = () => {
           insights.push(...schedules);
           
           // Add tank empty prediction
-          const tankPrediction = aiService.predictTankEmpty(totalLiters, 13225); // Sump tank capacity: 13,225L
+          const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 13225); // Sump tank capacity: 13,225L
           console.log('🤖 AI: Tank prediction:', tankPrediction);
           if (tankPrediction.hoursRemaining > 0) {
             insights.push({
@@ -316,36 +386,7 @@ const Index = () => {
         }
 
         // Fetch system status for ESP32 connection status
-        try {
-          const systemStatus = await apiService.getSystemStatus();
-          console.log('📡 System status fetched:', systemStatus);
-
-          // Update ESP32 status based on real data
-          setEsp32TopStatus({
-            connected: systemStatus.esp32_top_status === 'online',
-            wifiStrength: systemStatus.wifi_connected ? Math.floor(Math.random() * 40) + 60 : 0, // Mock WiFi strength
-            lastSeen: systemStatus.esp32_top_status === 'online' ? new Date() : null
-          });
-
-          setEsp32SumpStatus({
-            connected: systemStatus.esp32_sump_status === 'online',
-            wifiStrength: systemStatus.wifi_connected ? Math.floor(Math.random() * 40) + 60 : 0, // Mock WiFi strength
-            lastSeen: systemStatus.esp32_sump_status === 'online' ? new Date() : null
-          });
-        } catch (systemError) {
-          console.warn('Failed to fetch system status:', systemError);
-          // Set default offline status
-          setEsp32TopStatus({
-            connected: false,
-            wifiStrength: 0,
-            lastSeen: null
-          });
-          setEsp32SumpStatus({
-            connected: false,
-            wifiStrength: 0,
-            lastSeen: null
-          });
-        }
+        await refreshEsp32Status();
 
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error);
@@ -547,57 +588,280 @@ const Index = () => {
   const [esp32TopStatus, setEsp32TopStatus] = useState({
     connected: false,
     wifiStrength: 0,
-    lastSeen: null as Date | null
+    lastSeen: null as Date | null,
+    connectionState: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale',
+    backendResponsive: false
   });
   const [esp32SumpStatus, setEsp32SumpStatus] = useState({
     connected: false,
     wifiStrength: 0,
-    lastSeen: null as Date | null
+    lastSeen: null as Date | null,
+    connectionState: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale',
+    backendResponsive: false
   });
+
+  // Manual override state
+  const [manualOverride, setManualOverride] = useState(false);
+  const [autoModeEnabled, setAutoModeEnabled] = useState(true);
+  
+  // Function to refresh ESP32 connection status
+  const refreshEsp32Status = async () => {
+    try {
+      // First get the cached readings to compare with fresh data
+      const cachedReadings = apiService.getLastKnownTankReadings();
+      
+      setEsp32TopStatus(prev => ({ ...prev, connectionState: 'connecting' }));
+      setEsp32SumpStatus(prev => ({ ...prev, connectionState: 'connecting' }));
+      
+      const systemStatus = await apiService.getSystemStatus();
+      console.log('📡 ESP32 status refreshed:', systemStatus);
+      
+      // Get tank readings to check for freshness
+      const tanks = await apiService.getTanks();
+      const sumpTank = tanks.find(tank => tank.tank_type === 'sump_tank' || tank.tank_type === 'sump');
+      const topTank = tanks.find(tank => tank.tank_type === 'top_tank' || tank.tank_type === 'top');
+      
+      // Determine connection state based on multiple factors
+      const determineConnectionState = (
+        isOnline: boolean, 
+        tankData: any, 
+        cachedReading: any
+      ): 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale' => {
+        if (!isOnline) return 'disconnected';
+        
+        if (tankData && tankData.connection_state) {
+          return tankData.connection_state as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
+        }
+        
+        // If we have a timestamp, check data freshness
+        if (tankData && tankData.timestamp) {
+          const now = new Date();
+          const lastUpdate = new Date(tankData.timestamp);
+          const secondsElapsed = (now.getTime() - lastUpdate.getTime()) / 1000;
+          
+          if (secondsElapsed > 300) return 'stale'; // Data older than 5 minutes
+          if (secondsElapsed < 30) return 'connected'; // Fresh data
+          return 'reconnecting'; // Data between 30s and 5min old
+        }
+        
+        // Fallback to whatever the system status says
+        return isOnline ? 'connected' : 'disconnected';
+      };
+      
+      setEsp32TopStatus({
+        connected: systemStatus.esp32_top_status === 'online',
+        wifiStrength: systemStatus.wifi_strength || 0,
+        lastSeen: topTank ? new Date(topTank.timestamp) : (systemStatus.esp32_top_status === 'online' ? new Date() : null),
+        connectionState: determineConnectionState(
+          systemStatus.esp32_top_status === 'online',
+          topTank,
+          cachedReadings.top_tank
+        ),
+        backendResponsive: true
+      });
+      
+      setEsp32SumpStatus({
+        connected: systemStatus.esp32_sump_status === 'online',
+        wifiStrength: systemStatus.wifi_strength || 0,
+        lastSeen: sumpTank ? new Date(sumpTank.timestamp) : (systemStatus.esp32_sump_status === 'online' ? new Date() : null),
+        connectionState: determineConnectionState(
+          systemStatus.esp32_sump_status === 'online',
+          sumpTank,
+          cachedReadings.sump_tank
+        ),
+        backendResponsive: true
+      });
+      
+      // Removed toast notification to prevent spam
+    } catch (error) {
+      console.error('Failed to refresh ESP32 status:', error);
+      
+      setEsp32TopStatus(prev => ({
+        ...prev,
+        connected: false,
+        connectionState: 'disconnected',
+        backendResponsive: false
+      }));
+      
+      setEsp32SumpStatus(prev => ({
+        ...prev,
+        connected: false,
+        connectionState: 'disconnected',
+        backendResponsive: false
+      }));
+      
+      toast({
+        title: "ESP32 Status Error",
+        description: "Could not connect to ESP32 devices. Check backend connection.",
+        variant: "destructive",
+      });
+    }
+  };
 
   // WebSocket message handling for real-time updates
   useEffect(() => {
-    // Register WebSocket message handlers
-    apiService.onWebSocketMessage('system_status', (data) => {
+    console.log('🔌 Setting up consolidated WebSocket message handlers...');
+
+    // Define throttled tank data update function
+    const updateTankDataThrottled = (() => {
+      let lastUpdateTime = 0;
+      let pendingSumpData = null;
+      let pendingTopData = null;
+      let timeoutId = null;
+      
+      return (data) => {
+        const now = Date.now();
+        const MIN_UPDATE_INTERVAL = 300; // Only update UI at most every 300ms
+        
+        // Store the latest data
+        if (data.tank_type === 'sump_tank' || data.tank_type === 'sump') {
+          pendingSumpData = data;
+          
+          // Also update ESP32 connection status for sump tank
+          if (data.sensor_health !== undefined) {
+            setEsp32SumpStatus(prev => ({
+              ...prev,
+              connected: data.sensor_health === 'online',
+              lastSeen: new Date()
+            }));
+          }
+        } else if (data.tank_type === 'top_tank' || data.tank_type === 'top') {
+          pendingTopData = data;
+          
+          // Also update ESP32 connection status for top tank
+          if (data.sensor_health !== undefined) {
+            setEsp32TopStatus(prev => ({
+              ...prev,
+              connected: data.sensor_health === 'online',
+              lastSeen: new Date()
+            }));
+          }
+        }
+        
+        // If we have a pending update, don't schedule another one
+        if (timeoutId) return;
+        
+        // If it's been long enough since the last update, process immediately
+        if (now - lastUpdateTime > MIN_UPDATE_INTERVAL) {
+          processUpdate();
+        } else {
+          // Otherwise schedule an update for later
+          timeoutId = setTimeout(processUpdate, MIN_UPDATE_INTERVAL - (now - lastUpdateTime));
+        }
+        
+        function processUpdate() {
+          // Process sump data if available
+          if (pendingSumpData) {
+            setSumpLevelPercentage(pendingSumpData.level_percentage);
+            console.log('📊 Updated sump tank level:', pendingSumpData.level_percentage, '%');
+            
+            // Calculate total water level as sum of both tanks
+            updateTotalWaterLevel();
+            pendingSumpData = null;
+          }
+          
+          // Process top tank data if available
+          if (pendingTopData) {
+            setTopLevelPercentage(pendingTopData.level_percentage);
+            console.log('📊 Updated top tank level:', pendingTopData.level_percentage, '%');
+            
+            // Calculate total water level as sum of both tanks
+            updateTotalWaterLevel();
+            pendingTopData = null;
+          }
+          
+          // Reset the timeout and update the last update time
+          timeoutId = null;
+          lastUpdateTime = Date.now();
+        }
+        
+        // Helper to update the total water level based on both tank percentages
+        function updateTotalWaterLevel() {
+          // Calculate volume in liters based on percentages and tank capacities
+          const sumpLiters = 13225 * sumpLevelPercentage / 100;
+          const topLiters = 1000 * topLevelPercentage / 100;
+          const total = sumpLiters + topLiters;
+          
+          // Update total water level
+          setTotalWaterLevel(total);
+          
+          // Update water level change indicator (simplified logic)
+          const averagePercentage = (sumpLevelPercentage + topLevelPercentage) / 2;
+          setWaterLevelChange(averagePercentage > 50 ? 2.5 : -1.8);
+        }
+      };
+    })();
+
+    // Single consolidated handler for system_status messages
+    const systemStatusHandler = apiService.onWebSocketMessage('system_status', (data) => {
       console.log('📡 WebSocket system_status received:', data);
-      console.log('📡 ESP32 sump status:', data.esp32_sump_status);
 
       // Update ESP32 status based on real-time data
-      setEsp32TopStatus({
+      setEsp32TopStatus(prev => ({
+        ...prev,
         connected: data.esp32_top_status === 'online',
-        wifiStrength: data.wifi_strength || 0,
-        lastSeen: data.esp32_top_status === 'online' ? new Date() : null
-      });
+        wifiStrength: data.wifi_strength || prev.wifiStrength,
+        lastSeen: data.esp32_top_status === 'online' ? new Date() : prev.lastSeen,
+        connectionState: data.esp32_top_status === 'online' ? 'connected' : 'disconnected',
+        backendResponsive: true
+      }));
 
-      setEsp32SumpStatus({
+      setEsp32SumpStatus(prev => ({
+        ...prev,
         connected: data.esp32_sump_status === 'online',
-        wifiStrength: data.wifi_strength || 0,
-        lastSeen: data.esp32_sump_status === 'online' ? new Date() : null
-      });
-
-      console.log('📡 Updated ESP32 sump status:', data.esp32_sump_status === 'online');
+        wifiStrength: data.wifi_strength || prev.wifiStrength,
+        lastSeen: data.esp32_sump_status === 'online' ? new Date() : prev.lastSeen,
+        connectionState: data.esp32_sump_status === 'online' ? 'connected' : 'disconnected',
+        backendResponsive: true
+      }));
     });
 
-    apiService.onWebSocketMessage('tank_reading', (data) => {
-      console.log('📊 WebSocket tank_reading received:', data);
-      // Update tank data in real-time
-      if (data.tank_type === 'sump_tank' || data.tank_type === 'sump') {
-        setTotalWaterLevel(data.level_liters);
-        // Also update water level change (mock calculation)
-        setWaterLevelChange(data.level_percentage > 50 ? 2.5 : -1.8);
+    // Single consolidated handler for sensor_data messages
+    const sensorDataHandler = apiService.onWebSocketMessage('sensor_data', (data) => {
+      console.log('📊 WebSocket sensor_data received:', data);
+
+      // Update ESP32 connection status based on sensor data
+      if (data.esp32_id === 'ESP32_TOP_002' || data.tank_type === 'top_tank') {
+        setEsp32TopStatus(prev => ({
+          ...prev,
+          connected: data.connection_state === 'connected',
+          wifiStrength: data.signal_strength || prev.wifiStrength,
+          lastSeen: data.connection_state === 'connected' ? new Date() : prev.lastSeen,
+          connectionState: data.connection_state || 'disconnected',
+          backendResponsive: true
+        }));
+      }
+
+      // Update ESP32 Sump status
+      if (data.esp32_id === 'ESP32_SUMP_001' || data.esp32_id === 'ESP32_SUMP_002' || data.tank_type === 'sump_tank') {
+        setEsp32SumpStatus(prev => ({
+          ...prev,
+          connected: data.connection_state === 'connected',
+          wifiStrength: data.signal_strength || prev.wifiStrength,
+          lastSeen: data.connection_state === 'connected' ? new Date() : prev.lastSeen,
+          connectionState: data.connection_state || 'disconnected',
+          backendResponsive: true
+        }));
       }
     });
 
-    apiService.onWebSocketMessage('motor_status', (data) => {
+    // Single consolidated handler for tank_reading messages
+    const tankReadingHandler = apiService.onWebSocketMessage('tank_reading', (data) => {
+      console.log('📊 Tank reading received in Index.tsx:', data);
+      updateTankDataThrottled(data);
+    });
+
+    // Single consolidated handler for motor_status messages
+    const motorStatusHandler = apiService.onWebSocketMessage('motor_status', (data) => {
       console.log('⚙️ WebSocket motor_status received:', data);
-      // Update motor status in real-time
       setMotorRunning(data.motor_running);
       setMotorStatus(data.motor_running ? 'Running' : 'Stopped');
       setMotorLastRun(data.motor_running ? 'Currently running' : new Date().toLocaleString());
       setMotorCurrentDraw(data.current_draw || 0);
     });
 
-    apiService.onWebSocketMessage('system_alert', (data) => {
+    // Single consolidated handler for system_alert messages
+    const systemAlertHandler = apiService.onWebSocketMessage('system_alert', (data) => {
       console.log('🚨 WebSocket system_alert received:', data);
 
       // Map alert types from ESP32 to UI alert types
@@ -607,16 +871,16 @@ const Index = () => {
       // Handle specific ESP32 alert types
       if (data.alert_type === 'sump_90_percent') {
         alertType = "warning";
-        alertMessage = `🚨 Sump tank reached 90% capacity (${data.level_percentage?.toFixed(1)}%) - Buzzer activated`;
+        alertMessage = `ALERT: Sump tank reached 90% capacity (${data.level_percentage?.toFixed(1)}%) - Buzzer activated`;
       } else if (data.alert_type === 'sump_filled') {
         alertType = "error";
-        alertMessage = `⚠️ Sump tank is completely filled (${data.level_percentage?.toFixed(1)}%) - Buzzer activated 5 times`;
+        alertMessage = `WARNING: Sump tank is completely filled (${data.level_percentage?.toFixed(1)}%) - Buzzer activated 5 times`;
       } else if (data.alert_type === 'motor_auto_start') {
         alertType = "info";
-        alertMessage = `🚰 Motor started automatically - Sump filling, filling top tank`;
+        alertMessage = `Motor started automatically - Sump filling, filling top tank`;
       } else if (data.alert_type === 'motor_auto_stop') {
         alertType = "info";
-        alertMessage = `🛑 Motor stopped automatically - Top tank is full`;
+        alertMessage = `Motor stopped automatically - Top tank is full`;
       } else if (data.alert_type) {
         // Handle other alert types
         alertMessage = `${data.alert_type}: ${data.message}`;
@@ -642,18 +906,47 @@ const Index = () => {
       }
     });
 
-    // Handle manual override status updates
-    apiService.onWebSocketMessage('manual_override', (data) => {
+    // Single consolidated handler for manual_override messages
+    const manualOverrideHandler = apiService.onWebSocketMessage('manual_override', (data) => {
       console.log('🔧 WebSocket manual_override received:', data);
-      // Update manual override status
-      // Note: You might need to add a state variable for manual override status
+      setManualOverride(data.active || false);
+      setAutoModeEnabled(!data.active);
+
+      toast({
+        title: data.active ? "Manual Override Active" : "Auto Mode Restored",
+        description: data.active ?
+          "Manual control is now active. Auto mode is disabled." :
+          "Auto mode has been restored.",
+        variant: data.active ? "destructive" : "default"
+      });
     });
 
-    // Cleanup function to remove message handlers
+    // Cleanup function to remove all handlers
     return () => {
-      // Note: apiService doesn't have a remove handler method, so handlers stay active
-      // This is fine for this use case as the component will manage its own state updates
+      console.log('🔌 Cleaning up WebSocket message handlers...');
+      systemStatusHandler();
+      sensorDataHandler();
+      tankReadingHandler();
+      motorStatusHandler();
+      systemAlertHandler();
+      manualOverrideHandler();
     };
+  }, []);
+
+  // Monitor WebSocket connection status
+  useEffect(() => {
+    const checkConnection = () => {
+      const isConnected = apiService.isWebSocketConnected();
+      setWsConnected(isConnected);
+    };
+
+    // Check immediately
+    checkConnection();
+
+    // Check every 10 seconds instead of 2 to reduce refresh frequency
+    const interval = setInterval(checkConnection, 10000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // PIN Settings state
@@ -692,37 +985,7 @@ const Index = () => {
     });
   };
 
-  // Function to refresh ESP32 status
-  const refreshEsp32Status = async () => {
-    try {
-      const systemStatus = await apiService.getSystemStatus();
-      console.log('🔄 ESP32 status refreshed:', systemStatus);
-
-      setEsp32TopStatus({
-        connected: systemStatus.esp32_top_status === 'online',
-        wifiStrength: systemStatus.wifi_connected ? Math.floor(Math.random() * 40) + 60 : 0,
-        lastSeen: systemStatus.esp32_top_status === 'online' ? new Date() : null
-      });
-
-      setEsp32SumpStatus({
-        connected: systemStatus.esp32_sump_status === 'online',
-        wifiStrength: systemStatus.wifi_connected ? Math.floor(Math.random() * 40) + 60 : 0,
-        lastSeen: systemStatus.esp32_sump_status === 'online' ? new Date() : null
-      });
-
-      toast({
-        title: "ESP32 Status Updated",
-        description: "Connection status has been refreshed from the server.",
-      });
-    } catch (error) {
-      console.error('Failed to refresh ESP32 status:', error);
-      toast({
-        title: "Status Update Failed",
-        description: "Could not refresh ESP32 connection status.",
-        variant: "destructive",
-      });
-    }
-  };
+  // Function to refresh ESP32 status is defined above
 
   // System diagnostics function
   const handleSystemDiagnostics = () => {
@@ -992,6 +1255,24 @@ const Index = () => {
               <Badge 
                 variant="outline" 
                 className={`px-2 sm:px-3 py-1 text-xs sm:text-sm ${
+                  wsConnected 
+                    ? 'bg-success/10 border-success/20 text-success' 
+                    : 'bg-warning/10 border-warning/20 text-warning'
+                }`}
+              >
+                <div className={`w-2 h-2 rounded-full mr-1 sm:mr-2 animate-pulse ${
+                  wsConnected ? 'bg-success' : 'bg-warning'
+                }`} />
+                <span className="hidden sm:inline">
+                  WebSocket: {wsConnected ? 'Connected' : 'Disconnected'}
+                </span>
+                <span className="sm:hidden">
+                  WS: {wsConnected ? 'On' : 'Off'}
+                </span>
+              </Badge>
+              <Badge 
+                variant="outline" 
+                className={`px-2 sm:px-3 py-1 text-xs sm:text-sm ${
                   esp32TopStatus.connected && esp32SumpStatus.connected 
                     ? 'bg-success/10 border-success/20 text-success' 
                     : esp32TopStatus.connected || esp32SumpStatus.connected
@@ -1031,7 +1312,34 @@ const Index = () => {
       </header>
 
       {/* Main Content */}
-      <main className="relative z-10 container mx-auto px-4 py-8 space-y-8">
+      {useIsMobile() ? (
+        <MobileDashboard
+          totalWaterLevel={totalWaterLevel}
+          waterLevelChange={waterLevelChange}
+          motorStatus={motorStatus}
+          motorLastRun={motorLastRun}
+          motorRuntime={motorRuntime}
+          motorStartCount={motorStartCount}
+          motorCurrentDraw={motorCurrentDraw}
+          autoMode={autoMode}
+          motorRunning={motorRunning}
+          efficiency={efficiency}
+          dailyUsage={dailyUsage}
+          alerts={alerts}
+          aiInsights={aiInsights}
+          esp32TopStatus={esp32TopStatus}
+          esp32SumpStatus={esp32SumpStatus}
+          dailyConsumptionData={dailyConsumptionData}
+          monthlyConsumptionData={monthlyConsumptionData}
+          onToggleAutoMode={requestPinForAutoModeToggle}
+          onMotorStart={requestPinForMotorStart}
+          onMotorStop={requestPinForMotorStop}
+          onRefreshEsp32Status={refreshEsp32Status}
+          onAIQuerySubmit={handleAIQuery}
+          queryResponse={queryResponse}
+        />
+      ) : (
+        <main className="relative z-10 container mx-auto px-4 py-8 space-y-8">
         {/* System Overview Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <Card className="bg-card/60 backdrop-blur-sm border-border/50 hover:bg-card/80 transition-all duration-300">
@@ -1149,24 +1457,41 @@ const Index = () => {
               <Droplets className="h-5 w-5 text-primary" />
               <h2 className="text-xl font-semibold">Tank Monitoring</h2>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={refreshEsp32Status}
-              className="bg-background/50 hover:bg-accent/10 border-border/50"
-            >
-              <Wrench className="w-4 h-4 mr-2" />
-              Refresh ESP32 Status
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  console.log('🔄 Manual WebSocket reconnection requested');
+                  apiService.reconnectWebSocket();
+                  toast({
+                    title: "Reconnecting...",
+                    description: "Attempting to reconnect to the backend server.",
+                  });
+                }}
+                className="bg-background/50 hover:bg-accent/10 border-border/50"
+              >
+                🔄 Reconnect
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={refreshEsp32Status}
+                className="bg-background/50 hover:bg-accent/10 border-border/50"
+              >
+                <Wrench className="w-4 h-4 mr-2" />
+                Refresh ESP32 Status
+              </Button>
+            </div>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
               <EnhancedTankMonitor
                 title="Top Tank"
-                currentLevel={75}
+                currentLevel={topLevelPercentage}
                 capacity={1000}
-                status="normal"
-                sensorHealth="online"
+                status={topLevelPercentage < 30 ? "low" : topLevelPercentage > 90 ? "full" : "normal"}
+                sensorHealth={esp32TopStatus.connected ? "online" : "offline"}
                 esp32Status={esp32TopStatus}
                 symbol="🏠"
                 onRequestEsp32Connect={requestPinForEsp32Connect}
@@ -1180,10 +1505,10 @@ const Index = () => {
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
               <EnhancedTankMonitor
                 title="Sump Tank"
-                currentLevel={45}
+                currentLevel={sumpLevelPercentage}
                 capacity={13225}
-                status="low"
-                sensorHealth="online"
+                status={sumpLevelPercentage < 30 ? "low" : sumpLevelPercentage > 90 ? "full" : "normal"}
+                sensorHealth={esp32SumpStatus.connected ? "online" : "offline"}
                 esp32Status={esp32SumpStatus}
                 symbol="🕳️"
                 onRequestEsp32Connect={requestPinForEsp32Connect}
@@ -1493,6 +1818,7 @@ const Index = () => {
           </div>
         </section>
       </main>
+      )}
 
       {/* PIN Authentication Modal */}
       <PinModal

@@ -1,18 +1,88 @@
 
 import { createClient } from '@supabase/supabase-js'
+import { mockApiService } from './mockApi'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'your-supabase-url'
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-supabase-anon-key'
 
 const supabase = createClient(supabaseUrl, supabaseKey)
 
-// Local backend configuration
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://192.168.0.108:3001'
-const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || 'ws://192.168.0.108:8083'
+// Supabase backend configuration
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co'
+const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || 'wss://dwcouaacpqipvvsxiygo.supabase.co/functions/v1/websocket'
+
+// Flag to use mock API when backend is not available
+const USE_MOCK_API = false // Using real ESP32 data
+
+// Add custom properties to WebSocket type
+declare global {
+  interface WebSocket {
+    lastReconnectAttempt?: number;
+  }
+}
 
 // WebSocket connection for real-time updates
 let wsConnection: WebSocket | null = null
+let lastReconnectAttempt = 0; // Track last reconnection attempt globally
 const wsCallbacks: Map<string, (data: any) => void> = new Map()
+
+// Cache for last known valid tank readings
+const lastKnownTankReadings = {
+  sump_tank: {
+    level_percentage: 45, // Default value initially
+    level_liters: 0,
+    sensor_health: 'offline',
+    motor_running: false,
+    connection_state: 'disconnected',
+    timestamp: new Date().toISOString()
+  },
+  top_tank: {
+    level_percentage: 75, // Default value initially
+    level_liters: 0,
+    sensor_health: 'offline',
+    connection_state: 'disconnected',
+    timestamp: new Date().toISOString()
+  }
+}
+
+import { debounce } from 'lodash';
+
+// Debounce saving to localStorage to avoid excessive writes
+const debouncedSaveToLocalStorage = debounce(() => {
+  try {
+    localStorage.setItem('lastKnownTankReadings', JSON.stringify(lastKnownTankReadings));
+  } catch (storageError) {
+    console.warn('Failed to store tank readings in localStorage:', storageError);
+  }
+}, 500);
+
+// Heartbeat check to mark devices as stale if no data is received
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+
+  const checkStale = (tank: 'sump_tank' | 'top_tank') => {
+    const lastTimestamp = new Date(lastKnownTankReadings[tank].timestamp).getTime();
+    if (now - lastTimestamp > 30000 && lastKnownTankReadings[tank].connection_state === 'connected') {
+      console.log(`Marking ${tank} as stale, no data for 30s`);
+      lastKnownTankReadings[tank].connection_state = 'stale';
+      lastKnownTankReadings[tank].sensor_health = 'warning';
+      changed = true;
+    }
+  };
+
+  checkStale('sump_tank');
+  checkStale('top_tank');
+
+  if (changed) {
+    debouncedSaveToLocalStorage();
+    // Notify listeners that data has changed
+    const callback = wsCallbacks.get('tank_reading');
+    if (callback) {
+      callback(lastKnownTankReadings);
+    }
+  }
+}, 10000); // Check every 10 seconds
 
 export interface TankReading {
   id: string;
@@ -26,6 +96,7 @@ export interface TankReading {
   motor_running?: boolean;
   manual_override?: boolean;
   auto_mode_enabled?: boolean;
+  connection_state?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
   timestamp: string;
 }
 
@@ -59,6 +130,8 @@ export interface SystemStatus {
   float_switch?: boolean;
   motor_running?: boolean;
   manual_override?: boolean;
+  connection_state?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable';
+  backend_responsive?: boolean;
   timestamp: string;
 }
 
@@ -87,6 +160,18 @@ class ApiService {
   private requestQueue: Map<string, Promise<any>> = new Map();
 
   constructor() {
+    // Load last known tank readings from localStorage if available
+    try {
+      const savedReadings = localStorage.getItem('lastKnownTankReadings');
+      if (savedReadings) {
+        const parsed = JSON.parse(savedReadings);
+        Object.assign(lastKnownTankReadings, parsed);
+        console.log('📊 Loaded cached tank readings:', lastKnownTankReadings);
+      }
+    } catch (error) {
+      console.warn('Failed to load cached tank readings:', error);
+    }
+    
     this.initializeWebSocket()
     // Register pong handler for testing WebSocket connection
     this.onWebSocketMessage('pong', (data) => {
@@ -117,34 +202,153 @@ class ApiService {
         wsConnection.close()
         wsConnection = null
       }
+      
+      // Record current connection attempt time for reconnection throttling
+      const connectionAttemptTime = Date.now();
+      
+      // Track reconnection attempts to implement exponential backoff
+      let reconnectionAttempts = 0;
 
       console.log('🔌 Creating new WebSocket connection')
       wsConnection = new WebSocket(WS_URL)
 
       wsConnection.onopen = () => {
         console.log('WebSocket connected to local backend')
+        
+        // Reset the reconnection attempts counter on successful connection
+        reconnectionAttempts = 0;
+        
+        // Maintain ESP32 status during reconnection
+        // Instead of marking ESP32 as offline immediately on WebSocket reconnect,
+        // we'll maintain the last known state for a few seconds
+        
         // Send a test ping message
         this.sendWebSocketMessage({ type: 'ping', data: { timestamp: Date.now() } })
+        
+        // Request system status immediately after connection
+        this.sendWebSocketMessage({ 
+          type: 'request_system_status', 
+          data: { timestamp: Date.now() } 
+        })
       }
 
       wsConnection.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data)
-          console.log('📨 WebSocket message received:', message.type, message)
+          
+          // Skip excessive logging for performance - only log once every 5 messages
+          // This reduces console overhead which can slow down the UI
+          if (Math.random() < 0.2) {
+            console.log('📨 WebSocket message received:', message.type)
+          }
 
-          // Call registered callbacks
+          // Save tank readings to cache when received
+          if (message.type === 'tank_reading' && message.data) {
+            const tankData = message.data;
+            let changed = false;
+            
+            // Store in the appropriate cache based on tank type
+            if (tankData.tank_type === 'sump_tank' || tankData.tank_type === 'sump') {
+              console.log('📊 Caching sump tank reading:', tankData.level_percentage);
+              lastKnownTankReadings.sump_tank = {
+                ...lastKnownTankReadings.sump_tank,
+                level_percentage: tankData.level_percentage,
+                level_liters: tankData.level_liters,
+                sensor_health: tankData.sensor_health || 'good',
+                motor_running: tankData.motor_running !== undefined ? tankData.motor_running : lastKnownTankReadings.sump_tank.motor_running,
+                connection_state: 'connected',
+                timestamp: tankData.timestamp || new Date().toISOString()
+              };
+              changed = true;
+            } else if (tankData.tank_type === 'top_tank' || tankData.tank_type === 'top') {
+              console.log('📊 Caching top tank reading:', tankData.level_percentage);
+              lastKnownTankReadings.top_tank = {
+                ...lastKnownTankReadings.top_tank,
+                level_percentage: tankData.level_percentage,
+                level_liters: tankData.level_liters,
+                sensor_health: tankData.sensor_health || 'good',
+                connection_state: 'connected',
+                timestamp: tankData.timestamp || new Date().toISOString()
+              };
+              changed = true;
+            }
+            
+            if (changed) {
+              debouncedSaveToLocalStorage();
+            }
+          }
+
+          // Also handle system_status messages for ESP32 connection tracking
+          if (message.type === 'system_status' && message.data) {
+            const statusData = message.data;
+            let changed = false;
+            
+            // Update the ESP32 status in our cache
+            if (statusData.esp32_sump_status) {
+              const newState = statusData.esp32_sump_status === 'online' ? 'connected' : 'disconnected';
+              if (lastKnownTankReadings.sump_tank.connection_state !== newState) {
+                lastKnownTankReadings.sump_tank.connection_state = newState;
+                lastKnownTankReadings.sump_tank.sensor_health = newState === 'connected' ? 'good' : 'offline';
+                changed = true;
+              }
+            }
+            
+            if (statusData.esp32_top_status) {
+              const newState = statusData.esp32_top_status === 'online' ? 'connected' : 'disconnected';
+              if (lastKnownTankReadings.top_tank.connection_state !== newState) {
+                lastKnownTankReadings.top_tank.connection_state = newState;
+                lastKnownTankReadings.top_tank.sensor_health = newState === 'connected' ? 'good' : 'offline';
+                changed = true;
+              }
+            }
+            
+            if (changed) {
+              debouncedSaveToLocalStorage();
+            }
+          }
+          
+          // Also handle sensor_data messages which contain detailed ESP32 information
+          if (message.type === 'sensor_data' && message.data && message.data.payload) {
+            const sensorData = message.data.payload;
+            let changed = false;
+            
+            if (sensorData.tank_type === 'sump_tank' || sensorData.tank_type === 'sump') {
+              lastKnownTankReadings.sump_tank.motor_running = sensorData.motor_running !== undefined ? sensorData.motor_running : lastKnownTankReadings.sump_tank.motor_running;
+              lastKnownTankReadings.sump_tank.connection_state = sensorData.connection_state || 'connected';
+              lastKnownTankReadings.sump_tank.sensor_health = sensorData.sensor_health || 'good';
+              changed = true;
+            } else if (sensorData.tank_type === 'top_tank' || sensorData.tank_type === 'top') {
+              lastKnownTankReadings.top_tank.connection_state = sensorData.connection_state || 'connected';
+              lastKnownTankReadings.top_tank.sensor_health = sensorData.sensor_health || 'good';
+              changed = true;
+            }
+            
+            if (changed) {
+              debouncedSaveToLocalStorage();
+            }
+          }
+          
+          // Call registered callbacks efficiently - use requestAnimationFrame to 
+          // ensure UI updates are synchronized with the browser's rendering cycle
           const callback = wsCallbacks.get(message.type)
           if (callback) {
-            console.log('📨 Calling callback for:', message.type)
-            callback(message.data)
-          } else {
-            console.log('📨 No callback registered for:', message.type)
+            // Use requestAnimationFrame for UI related updates
+            requestAnimationFrame(() => {
+              try {
+                callback(message.data)
+              } catch (callbackError) {
+                console.error('❌ Error in WebSocket callback:', callbackError)
+              }
+            })
           }
         } catch (error) {
           console.error('❌ Error processing WebSocket message:', error)
         }
       }
 
+      // Use global lastReconnectAttempt variable
+      const now = Date.now();
+      
       wsConnection.onclose = (event) => {
         console.log('WebSocket disconnected')
         console.log('Close code:', event.code)
@@ -177,8 +381,45 @@ class ApiService {
           console.log('Unknown close code')
         }
 
-        // Attempt to reconnect after 5 seconds
-        setTimeout(() => this.initializeWebSocket(), 5000)
+        // Clear the connection reference
+        wsConnection = null
+        
+        // Important: Don't immediately mark ESP32 devices as disconnected on WebSocket close
+        // They may still be sending data to the backend even if our frontend WebSocket is disconnected
+        // Instead, we'll maintain the last known status for some time
+        
+        // Set connection_state to 'reconnecting' but don't change sensor_health yet
+        // This shows the device as temporarily disconnected in the UI without losing sensor data
+        lastKnownTankReadings.sump_tank.connection_state = 'reconnecting';
+        lastKnownTankReadings.top_tank.connection_state = 'reconnecting';
+        
+        // Persist this transitional state
+        try {
+          localStorage.setItem('lastKnownTankReadings', JSON.stringify(lastKnownTankReadings));
+        } catch (storageError) {
+          console.warn('Failed to store tank readings in localStorage:', storageError);
+        }
+        
+        // Calculate reconnection delay with exponential backoff (1s, 2s, 4s, 8s, etc.)
+        // But cap at 30 seconds maximum
+        reconnectionAttempts++;
+        const reconnectDelay = Math.min(
+          1000 * Math.pow(2, reconnectionAttempts - 1), 
+          30000
+        );
+        
+        // Only reconnect if it's been at least 3 seconds since the last attempt
+        // This prevents excessive reconnection attempts during development with HMR
+        if (now - lastReconnectAttempt > 3000) {
+          console.log(`🔄 Scheduling WebSocket reconnection in ${reconnectDelay/1000} seconds...`)
+          setTimeout(() => {
+            console.log('🔄 Attempting WebSocket reconnection...')
+            lastReconnectAttempt = Date.now();
+            this.initializeWebSocket()
+          }, reconnectDelay)
+        } else {
+          console.log('🔄 Skipping reconnection - too soon since last attempt')
+        }
       }
 
       wsConnection.onerror = (error) => {
@@ -218,42 +459,74 @@ class ApiService {
     }
   }
 
-  // Test WebSocket connection
-  testWebSocketConnection(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const testWs = new WebSocket(WS_URL)
-      const timeout = setTimeout(() => {
-        testWs.close()
-        console.error('WebSocket test timeout')
-        resolve(false)
-      }, 10000) // 10 second timeout
+  // Manual WebSocket reconnection
+  reconnectWebSocket() {
+    console.log('🔄 Manual WebSocket reconnection requested')
+    
+    // Don't mark ESP32 as offline during manual reconnection
+    // This prevents UI flicker when reconnecting
+    const preserveStatus = true;
+    
+    if (wsConnection) {
+      wsConnection.close()
+      wsConnection = null
+    }
+    
+    // Only update sensor_health if this isn't a manual reconnection
+    if (!preserveStatus) {
+      // Mark sensors as temporarily offline during reconnection
+      lastKnownTankReadings.sump_tank.sensor_health = 'offline';
+      lastKnownTankReadings.top_tank.sensor_health = 'offline';
+    }
+    
+    setTimeout(() => this.initializeWebSocket(), 1000)
+  }
 
-      testWs.onopen = () => {
-        console.log('✅ WebSocket test connection successful')
-        clearTimeout(timeout)
-        testWs.close()
-        resolve(true)
-      }
+  // Check WebSocket connection status
+  isWebSocketConnected(): boolean {
+    return wsConnection && wsConnection.readyState === WebSocket.OPEN
+  }
 
-      testWs.onerror = (error) => {
-        console.error('❌ WebSocket test connection failed:', error)
-        clearTimeout(timeout)
-        resolve(false)
-      }
-
-      testWs.onclose = (event) => {
-        console.log('WebSocket test connection closed:', event.code, event.reason)
-        clearTimeout(timeout)
-        if (!event.wasClean) {
-          resolve(false)
-        }
-      }
-    })
+  // Get detailed connection status
+  getConnectionStatus(): { connected: boolean; readyState: number; url: string | null } {
+    return {
+      connected: this.isWebSocketConnected(),
+      readyState: wsConnection ? wsConnection.readyState : -1,
+      url: wsConnection ? wsConnection.url : null
+    }
   }
 
   // Register callback for WebSocket messages
   onWebSocketMessage(type: string, callback: (data: any) => void) {
-    wsCallbacks.set(type, callback)
+    const existingCallback = wsCallbacks.get(type);
+
+    const newCallback = (data: any) => {
+      if (existingCallback) {
+        existingCallback(data);
+      }
+      callback(data);
+
+      // For motor_status messages, also update our cached tank readings
+      if (type === 'motor_status' && data && data.motor_running !== undefined) {
+        console.log('Updating cached motor status from motor_status message:', data.motor_running);
+        lastKnownTankReadings.sump_tank.motor_running = data.motor_running;
+        
+        // Store in localStorage for persistence
+        try {
+          localStorage.setItem('lastKnownTankReadings', JSON.stringify(lastKnownTankReadings));
+        } catch (storageError) {
+          console.warn('Failed to store motor status in localStorage:', storageError);
+        }
+      }
+    };
+    
+    // Store the combined callback
+    wsCallbacks.set(type, newCallback);
+    
+    // Return unsubscribe function
+    return () => {
+      wsCallbacks.set(type, existingCallback || (() => {})); // Restore original or empty
+    };
   }
 
   // Send WebSocket message
@@ -325,6 +598,10 @@ class ApiService {
 
   // Tank data methods
   async getTanks(): Promise<TankReading[]> {
+    if (USE_MOCK_API) {
+      return mockApiService.getTanks();
+    }
+    
     try {
       const response = await fetch(`${BACKEND_URL}/api/tanks`)
       if (!response.ok) {
@@ -349,7 +626,67 @@ class ApiService {
       }))
     } catch (error) {
       console.error('Error fetching tanks:', error)
-      return []
+      
+      if (USE_MOCK_API) {
+        console.log('Falling back to mock data');
+        return mockApiService.getTanks();
+      }
+      
+      // If we have cached tank readings, return those instead of an empty array
+      console.log('📊 Using last known tank readings due to API error:', lastKnownTankReadings);
+      
+      // Check if WebSocket is connected
+      const wsConnected = this.isWebSocketConnected();
+      const now = new Date();
+      
+      // Calculate time elapsed since last tank reading update
+      const sumpLastUpdated = new Date(lastKnownTankReadings.sump_tank.timestamp || new Date());
+      const topLastUpdated = new Date(lastKnownTankReadings.top_tank.timestamp || new Date());
+      const sumpElapsedSeconds = (now.getTime() - sumpLastUpdated.getTime()) / 1000;
+      const topElapsedSeconds = (now.getTime() - topLastUpdated.getTime()) / 1000;
+      
+      // If readings are over 5 minutes old, mark as stale
+      const sumpIsStale = sumpElapsedSeconds > 300;
+      const topIsStale = topElapsedSeconds > 300;
+      
+      // Determine actual connection states based on WebSocket status and data freshness
+      const sumpConnectionState = !wsConnected ? 'disconnected' as const : 
+                                 sumpIsStale ? 'stale' as const : 
+                                 (lastKnownTankReadings.sump_tank.connection_state || 'disconnected') as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
+                                 
+      const topConnectionState = !wsConnected ? 'disconnected' as const : 
+                               topIsStale ? 'stale' as const : 
+                               (lastKnownTankReadings.top_tank.connection_state || 'disconnected') as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
+      
+      // Determine sensor health based on connection state
+      const sumpSensorHealth = (sumpConnectionState === 'disconnected' || sumpConnectionState === 'stale') ? 
+                               'offline' : lastKnownTankReadings.sump_tank.sensor_health;
+                               
+      const topSensorHealth = (topConnectionState === 'disconnected' || topConnectionState === 'stale') ? 
+                             'offline' : lastKnownTankReadings.top_tank.sensor_health;
+      
+      // Convert our cached readings to the expected format
+      return [
+        {
+          id: 'cached-sump',
+          tank_type: 'sump_tank',
+          level_percentage: lastKnownTankReadings.sump_tank.level_percentage,
+          level_liters: lastKnownTankReadings.sump_tank.level_liters,
+          sensor_health: sumpSensorHealth,
+          motor_running: lastKnownTankReadings.sump_tank.motor_running,
+          connection_state: sumpConnectionState,
+          timestamp: lastKnownTankReadings.sump_tank.timestamp
+        },
+        {
+          id: 'cached-top',
+          tank_type: 'top_tank',
+          level_percentage: lastKnownTankReadings.top_tank.level_percentage,
+          level_liters: lastKnownTankReadings.top_tank.level_liters,
+          sensor_health: topSensorHealth,
+          connection_state: topConnectionState,
+          timestamp: lastKnownTankReadings.top_tank.timestamp
+        }
+      ];
     }
   }
 
@@ -370,6 +707,10 @@ class ApiService {
 
   // Motor methods
   async controlMotor(action: 'start' | 'stop'): Promise<{ success: boolean; event: MotorEvent }> {
+    if (USE_MOCK_API) {
+      return mockApiService.controlMotor(action);
+    }
+    
     try {
       // Send WebSocket message for motor control
       this.sendWebSocketMessage({
@@ -407,11 +748,19 @@ class ApiService {
       }
     } catch (error) {
       console.error('Error controlling motor:', error)
+      if (USE_MOCK_API) {
+        console.log('Falling back to mock data');
+        return mockApiService.controlMotor(action);
+      }
       throw error
     }
   }
 
   async getMotorEvents(): Promise<MotorEvent[]> {
+    if (USE_MOCK_API) {
+      return mockApiService.getMotorEvents();
+    }
+    
     try {
       const response = await fetch(`${BACKEND_URL}/api/motor/events`)
       if (!response.ok) {
@@ -432,12 +781,20 @@ class ApiService {
       }))
     } catch (error) {
       console.error('Error fetching motor events:', error)
+      if (USE_MOCK_API) {
+        console.log('Falling back to mock data');
+        return mockApiService.getMotorEvents();
+      }
       return []
     }
   }
 
   // Alert methods
   async getAlerts(): Promise<SystemAlert[]> {
+    if (USE_MOCK_API) {
+      return mockApiService.getAlerts();
+    }
+    
     try {
       const response = await fetch(`${BACKEND_URL}/api/alerts`)
       if (!response.ok) {
@@ -455,6 +812,10 @@ class ApiService {
       }))
     } catch (error) {
       console.error('Error fetching alerts:', error)
+      if (USE_MOCK_API) {
+        console.log('Falling back to mock data');
+        return mockApiService.getAlerts();
+      }
       return []
     }
   }
@@ -480,6 +841,10 @@ class ApiService {
 
   // System status methods
   async getSystemStatus(): Promise<SystemStatus> {
+    if (USE_MOCK_API) {
+      return mockApiService.getSystemStatus();
+    }
+    
     try {
       const response = await fetch(`${BACKEND_URL}/api/system/status`)
       if (!response.ok) {
@@ -499,10 +864,16 @@ class ApiService {
         float_switch: data.float_switch || false,
         motor_running: data.motor_running || false,
         manual_override: data.manual_override || false,
+        connection_state: data.connection_state || 'disconnected',
+        backend_responsive: true,
         timestamp: data.timestamp || new Date().toISOString()
       }
     } catch (error) {
       console.error('Error fetching system status:', error)
+      if (USE_MOCK_API) {
+        console.log('Falling back to mock data');
+        return mockApiService.getSystemStatus();
+      }
       return {
         id: '1',
         wifi_connected: false,
@@ -553,8 +924,31 @@ class ApiService {
     }
   }
 
+  // Get last known tank readings (works even when offline)
+  getLastKnownTankReadings(tankType?: 'sump_tank' | 'top_tank' | 'sump' | 'top'): any {
+    // If tank type is specified, return only that tank's reading
+    if (tankType) {
+      // Map variant names to our stored keys
+      const mappedType = tankType === 'sump' ? 'sump_tank' : 
+                          tankType === 'top' ? 'top_tank' : 
+                          tankType;
+      
+      // Return the reading for the requested tank type
+      return mappedType === 'top_tank' ? 
+        lastKnownTankReadings.top_tank : 
+        lastKnownTankReadings.sump_tank;
+    }
+    
+    // Otherwise return all tank readings
+    return lastKnownTankReadings;
+  }
+  
   // Consumption data
   async getConsumptionData(period: 'daily' | 'monthly' = 'daily'): Promise<ConsumptionData[]> {
+    if (USE_MOCK_API) {
+      return mockApiService.getConsumptionData(period);
+    }
+    
     try {
       // For now, use tank readings to calculate consumption
       // In a real implementation, you'd have a dedicated consumption endpoint
@@ -593,6 +987,10 @@ class ApiService {
       return consumptionData
     } catch (error) {
       console.error('Error fetching consumption data:', error)
+      if (USE_MOCK_API) {
+        console.log('Falling back to mock data');
+        return mockApiService.getConsumptionData(period);
+      }
       return []
     }
   }
@@ -631,6 +1029,10 @@ class ApiService {
 
   // ESP32 Device methods
   async getESP32Devices(): Promise<ESP32Device[]> {
+    if (USE_MOCK_API) {
+      return mockApiService.getESP32Devices();
+    }
+    
     try {
       const response = await fetch(`${BACKEND_URL}/api/esp32/devices`)
       if (!response.ok) {
@@ -640,12 +1042,20 @@ class ApiService {
       return data.devices || []
     } catch (error) {
       console.error('Error fetching ESP32 devices:', error)
+      if (USE_MOCK_API) {
+        console.log('Falling back to mock data');
+        return mockApiService.getESP32Devices();
+      }
       return []
     }
   }
 
   // Auto mode control
   async setAutoMode(enabled: boolean): Promise<void> {
+    if (USE_MOCK_API) {
+      return mockApiService.setAutoMode(enabled);
+    }
+    
     this.sendWebSocketMessage({
       type: 'auto_mode_control',
       enabled: enabled
@@ -654,6 +1064,10 @@ class ApiService {
 
   // Manual override reset
   async resetManualOverride(): Promise<void> {
+    if (USE_MOCK_API) {
+      return mockApiService.resetManualOverride();
+    }
+    
     this.sendWebSocketMessage({
       type: 'reset_manual'
     })

@@ -38,20 +38,20 @@
  * - Buzzer and LED for alerts
  *
  * Wiring:
- * - AJ-SR04M TRIG → ESP32 GPIO 5
- * - AJ-SR04M ECHO → ESP32 GPIO 18
- * - AJ-SR04M GND → ESP32 GND
- * - AJ-SR04M VCC → ESP32 5V
- * - Float Switch → ESP32 GPIO 4 (with pull-up)
- * - Manual Button → ESP32 GPIO 12 (with pull-up)
- * - Motor Relay → ESP32 GPIO 13
- * - Buzzer → ESP32 GPIO 14
- * - LED → ESP32 GPIO 15
- * - Auto Mode LED → ESP32 GPIO 16
- * - Sump Full LED → ESP32 GPIO 17
- * - Sump Low LED → ESP32 GPIO 21
- * - Manual Motor Switch → ESP32 GPIO 25 (with pull-up)
- * - Mode Switch → ESP32 GPIO 26 (with pull-up)
+ * - AJ-SR04M TRIG -> ESP32 GPIO 5
+ * - AJ-SR04M ECHO -> ESP32 GPIO 18
+ * - AJ-SR04M GND -> ESP32 GND
+ * - AJ-SR04M VCC -> ESP32 5V
+ * - Float Switch -> ESP32 GPIO 4 (with pull-up)
+ * - Manual Button -> ESP32 GPIO 12 (with pull-up)
+ * - Motor Relay -> ESP32 GPIO 13
+ * - Buzzer -> ESP32 GPIO 14
+ * - LED -> ESP32 GPIO 15
+ * - Auto Mode LED -> ESP32 GPIO 16
+ * - Sump Full LED -> ESP32 GPIO 17
+ * - Sump Low LED -> ESP32 GPIO 21
+ * - Manual Motor Switch -> ESP32 GPIO 25 (with pull-up)
+ * - Mode Switch -> ESP32 GPIO 26 (with pull-up)
  *
  * Communication:
  * - HTTP server (port 80) for Top Tank ESP32 commands
@@ -68,10 +68,9 @@ const char* WIFI_SSID = "I am Not A Witch I am Your Wifi";
 const char* WIFI_PASSWORD = "Whoareu@0000";
 
 // Server Configuration - PRODUCTION SUPABASE URLs
-const char* SUPABASE_URL = "dwcouaacpqipvvsxiygo.supabase.co";
-const char* WEBSOCKET_HOST = "dwcouaacpqipvvsxiygo.supabase.co";
-const int WEBSOCKET_PORT = 443;
-const char* WEBSOCKET_PATH = "/functions/v1/websocket";
+const char* SUPABASE_URL = "https://dwcouaacpqipvvsxiygo.supabase.co";
+const int WEBSOCKET_PORT = 443;  // HTTPS port for Supabase
+const char* WEBSOCKET_PATH = "/functions/v1/websocket";  // Supabase Edge Function path
 const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4";
 
 // Device Configuration
@@ -119,12 +118,14 @@ const float MIN_SENSOR_DISTANCE_CM = 20.0;  // Minimum reliable detection distan
 const float MAX_SENSOR_DISTANCE_CM = 450.0; // Maximum detection distance
 
 // ========== FUNCTION PROTOTYPES ==========
-void startMotor(bool manualOverride = false);
+bool startMotor(bool manualOverride = false);
 bool canMotorStart(bool manualOverride = false);
 void stopMotor();
 void sendMotorStatus();
 void sendSensorData();
 void sendPing();
+void sendSystemAlert(String alertType, String message);
+void sendTankReading();
 void updateLedIndicators();
 void readModeSwitch();
 void readManualMotorSwitch();
@@ -143,7 +144,7 @@ void attemptWebSocketReconnection();
 #include <esp_task_wdt.h>  // ESP32 Watchdog Timer
 
 // ========== WATCHDOG CONFIGURATION ==========
-#define WDT_TIMEOUT 30  // Watchdog timeout in seconds
+#define WDT_TIMEOUT 60  // Watchdog timeout in seconds (INCREASED from 30s)
 unsigned long lastWatchdogFeed = 0;
 const unsigned long WATCHDOG_FEED_INTERVAL = 10000; // Feed watchdog every 10 seconds
 
@@ -193,7 +194,7 @@ String lastCommandSource = "";
 // LED and Switch state variables
 bool autoModeLedOn = true;    // LED 1: Auto mode (default ON)
 bool sumpFullLedOn = false;   // LED 2: Sump full (90%)
-bool sumpLowLedOn = false;    // LED 3: Sump low (25%)
+bool sumpLowLedOn = false;    // LED 3: Sump low/empty (ON when empty, blinking at 85%, steady ON at 90%)
 bool lastModeSwitchState = HIGH;     // For debouncing mode switch
 bool lastManualMotorSwitchState = HIGH; // For debouncing manual motor switch
 unsigned long lastModeSwitchTime = 0;
@@ -230,46 +231,100 @@ const unsigned long DEBOUNCE_DELAY = 200; // 200ms debounce
 
 // HTTP Server handlers
 void handleMotorCommand() {
+  Serial.println("==========================================");
+  Serial.println("📡 SUMP TANK ESP32 ← TOP TANK ESP32 COMMUNICATION");
+  Serial.println("==========================================");
+
   if (server.method() != HTTP_POST) {
     server.send(405, "text/plain", "Method Not Allowed");
+    Serial.println("❌ ERROR: Invalid HTTP method received (not POST)");
+    Serial.println("🔍 EXPECTED: POST request with JSON payload");
     return;
   }
 
   String payload = server.arg("plain");
+  Serial.println("📦 RAW PAYLOAD RECEIVED:");
+  Serial.println(payload);
+  Serial.println("==========================================");
+
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, payload);
 
   if (error) {
     server.send(400, "text/plain", "Invalid JSON");
-    Serial.println("❌ Invalid JSON received from Top Tank ESP32");
+    Serial.println("❌ ERROR: Invalid JSON format in payload");
+    Serial.print("🔍 DESERIALIZATION ERROR: ");
+    Serial.println(error.c_str());
     return;
   }
 
   String command = doc["command"];
   String source = doc["source"];
   float topLevel = doc["top_level"];
+  String esp32Id = doc["esp32_id"] | "unknown";
+  unsigned long timestamp = doc["timestamp"] | 0;
 
-  Serial.print("📡 Motor command from ");
-  Serial.print(source);
-  Serial.print(": ");
-  Serial.print(command);
-  Serial.print(" (Top Tank Level: ");
+  Serial.println("✅ JSON PARSED SUCCESSFULLY!");
+  Serial.print("🎯 COMMAND: ");
+  Serial.println(command);
+  Serial.print("📍 SOURCE: ");
+  Serial.println(source);
+  Serial.print("🏷️  ESP32 ID: ");
+  Serial.println(esp32Id);
+  Serial.print("📊 TOP TANK LEVEL: ");
   Serial.print(topLevel, 1);
-  Serial.println("%)");
+  Serial.println("%");
+  Serial.print("⏰ TIMESTAMP: ");
+  Serial.println(timestamp);
+  Serial.println("==========================================");
 
   lastCommandSource = source;
 
   if (command == "start") {
-    Serial.println("🚀 Starting motor from Top Tank command");
-    startMotor();
-    server.send(200, "text/plain", "Motor started");
+    Serial.println("🚀 MOTOR START COMMAND RECEIVED");
+    Serial.println("🔍 CHECKING SAFETY CONDITIONS...");
+
+    // Check float switch before starting motor
+    Serial.print("🏊 FLOAT SWITCH STATUS: ");
+    Serial.println(floatSwitchOn ? "ON (SAFE)" : "OFF (UNSAFE)");
+
+    if (floatSwitchOn) {
+      Serial.println("✅ SAFETY CHECK PASSED - Starting motor...");
+      if (startMotor()) {
+        server.send(200, "text/plain", "Motor started");
+        Serial.println("✅ SUCCESS: Motor started successfully!");
+        Serial.println("📤 RESPONSE SENT: HTTP 200 - Motor started");
+      } else {
+        server.send(400, "text/plain", "Cannot start motor - safety check failed");
+        Serial.println("❌ ERROR: Motor start failed - safety check failed");
+        Serial.println("📤 RESPONSE SENT: HTTP 400 - Safety check failed");
+      }
+    } else {
+      Serial.println("❌ SAFETY VIOLATION: Cannot start motor - float switch is OFF");
+      Serial.println("🛡️  SAFETY PROTOCOL: Motor will not start without water in sump");
+      server.send(400, "text/plain", "Cannot start motor - float switch is OFF");
+      Serial.println("📤 RESPONSE SENT: HTTP 400 - Float switch OFF");
+    }
   } else if (command == "stop") {
-    Serial.println("🛑 Stopping motor from Top Tank command");
+    Serial.println("🛑 MOTOR STOP COMMAND RECEIVED");
+    Serial.println("🔄 ACTION: Stopping motor...");
     stopMotor();
     server.send(200, "text/plain", "Motor stopped");
+    Serial.println("✅ SUCCESS: Motor stopped successfully!");
+    Serial.println("📤 RESPONSE SENT: HTTP 200 - Motor stopped");
   } else {
+    Serial.println("❓ UNKNOWN COMMAND RECEIVED");
+    Serial.print("🔍 RECEIVED COMMAND: '");
+    Serial.print(command);
+    Serial.println("'");
+    Serial.println("📋 VALID COMMANDS: 'start', 'stop'");
     server.send(400, "text/plain", "Invalid command");
+    Serial.println("📤 RESPONSE SENT: HTTP 400 - Invalid command");
   }
+
+  Serial.println("==========================================");
+  Serial.println("🎉 COMMUNICATION COMPLETED!");
+  Serial.println("==========================================");
 }
 
 void handleStatus() {
@@ -304,10 +359,10 @@ void handleRoot() {
 
   // Network Information
   html += "<h2>Network Information:</h2>";
-  html += "<p>📡 IP Address: " + WiFi.localIP().toString() + "</p>";
-  html += "<p>🔗 MAC Address: " + WiFi.macAddress() + "</p>";
-  html += "<p>📶 WiFi Signal: " + String(WiFi.RSSI()) + " dBm</p>";
-  html += "<p>🌐 Connection Status: " + String(wifiConnected ? "Connected" : "Disconnected") + "</p>";
+  html += "<p>ANTENNA: IP Address: " + WiFi.localIP().toString() + "</p>";
+  html += "<p>LINK: MAC Address: " + WiFi.macAddress() + "</p>";
+  html += "<p>SIGNAL: WiFi Signal: " + String(WiFi.RSSI()) + " dBm</p>";
+  html += "<p>WEB: Connection Status: " + String(wifiConnected ? "Connected" : "Disconnected") + "</p>";
 
   html += "<h2>Tank Status:</h2>";
   html += "<p>Sump Level: " + String(sumpLevel, 1) + "%</p>";
@@ -318,9 +373,9 @@ void handleRoot() {
 
   // LED Status
   html += "<h2>LED Indicators:</h2>";
-  html += "<p>🔵 Auto Mode LED: " + String(autoModeLedOn ? "ON" : "OFF") + "</p>";
-  html += "<p>🔴 Sump Full LED (90%): " + String(sumpFullLedOn ? "ON" : "OFF") + "</p>";
-  html += "<p>🟡 Sump Low LED (25%): " + String(sumpLowLedOn ? "ON" : "OFF") + "</p>";
+  html += "<p>BLUE: Auto Mode LED: " + String(autoModeLedOn ? "ON" : "OFF") + "</p>";
+  html += "<p>RED: Sump Full LED (90%): " + String(sumpFullLedOn ? "ON" : "OFF") + "</p>";
+  html += "<p>YELLOW: Sump Low LED (25%): " + String(sumpLowLedOn ? "ON" : "OFF") + "</p>";
 
   html += "</body></html>";
   server.send(200, "text/html", html);
@@ -332,7 +387,7 @@ void testAJ_SR04MCommunication() {
 
   // Test multiple readings with enhanced diagnostics and timeout protection
   for (int i = 0; i < 5; i++) {
-    Serial.print("📏 Test ");
+    Serial.print("RULER: Test ");
     Serial.print(i + 1);
     Serial.print(": ");
 
@@ -352,32 +407,32 @@ void testAJ_SR04MCommunication() {
     if (duration == 0) {
       Serial.println("TIMEOUT - No echo received (check wiring/power/sensor position)");
       Serial.println("   Possible issues:");
-      Serial.println("   • Sensor not powered (needs 5V)");
-      Serial.println("   • Wiring incorrect (TRIG=GPIO5, ECHO=GPIO18)");
-      Serial.println("   • Sensor too close to surface (<20cm)");
-      Serial.println("   • Sensor faulty or damaged");
+      Serial.println("   - Sensor not powered (needs 5V)");
+      Serial.println("   - Wiring incorrect (TRIG=GPIO5, ECHO=GPIO18)");
+      Serial.println("   - Sensor too close to surface (<20cm)");
+      Serial.println("   - Sensor faulty or damaged");
     } else {
       float distance = (duration * 0.0343) / 2;
       Serial.print("Duration = ");
       Serial.print(duration);
-      Serial.print(" μs, Distance = ");
+      Serial.print(" us, Distance = ");
       Serial.print(distance);
       Serial.println(" cm");
 
       if (distance < 20.0) {
-        Serial.println("   ⚠️ WARNING: Distance below minimum detection range (20cm)");
+        Serial.println("   WARNING: Distance below minimum detection range (20cm)");
       }
     }
 
     delay(500);
   }
 
-  Serial.println("✅ AJ-SR04M test completed");
-  Serial.println("💡 Sensor Specifications:");
-  Serial.println("   • Minimum detection distance: 20 cm (IMPORTANT LIMITATION)");
-  Serial.println("   • Maximum detection distance: 450 cm");
-  Serial.println("   • Operating voltage: 5V DC");
-  Serial.println("   • Current consumption: <15mA");
+  Serial.println("SUCCESS: AJ-SR04M test completed");
+  Serial.println("BULB: Sensor Specifications:");
+  Serial.println("   - Minimum detection distance: 20 cm (IMPORTANT LIMITATION)");
+  Serial.println("   - Maximum detection distance: 450 cm");
+  Serial.println("   - Operating voltage: 5V DC");
+  Serial.println("   - Current consumption: <15mA");
 }
 
 // Read sump tank ultrasonic sensor with comprehensive error handling and validation
@@ -405,7 +460,7 @@ float readSumpUltrasonicLevel() {
 
     // Check for timeout (no echo received)
     if (duration == 0) {
-      Serial.println("⚠️ Ultrasonic sensor timeout - no echo received");
+      Serial.println("WARNING: Ultrasonic sensor timeout - no echo received");
       invalidReadings++;
       delay(50); // Short delay before retry
       continue;
@@ -416,14 +471,14 @@ float readSumpUltrasonicLevel() {
 
     // Validate distance reading
     if (distance < MIN_SENSOR_DISTANCE_CM || distance > MAX_SENSOR_DISTANCE_CM || isnan(distance) || isinf(distance)) {
-      Serial.print("⚠️ Invalid distance reading: ");
+      Serial.print("WARNING: Invalid distance reading: ");
       Serial.print(distance);
       Serial.println(" cm (out of valid range)");
       invalidReadings++;
     } else {
       readings[validReadings] = distance;
       validReadings++;
-      Serial.print("✅ Valid reading ");
+      Serial.print("SUCCESS: Valid reading ");
       Serial.print(validReadings);
       Serial.print(": ");
       Serial.print(distance);
@@ -435,7 +490,7 @@ float readSumpUltrasonicLevel() {
 
   // Check if we have enough valid readings
   if (validReadings < (NUM_READINGS - MAX_INVALID_READINGS)) {
-    Serial.print("❌ Too many invalid readings (");
+    Serial.print("ERROR: Too many invalid readings (");
     Serial.print(invalidReadings);
     Serial.print("/");
     Serial.print(NUM_READINGS);
@@ -444,7 +499,7 @@ float readSumpUltrasonicLevel() {
   }
 
   if (validReadings == 0) {
-    Serial.println("❌ No valid readings obtained");
+    Serial.println("ERROR: No valid readings obtained");
     return -1;
   }
 
@@ -457,13 +512,13 @@ float readSumpUltrasonicLevel() {
 
   // Additional validation of average
   if (averageDistance < MIN_SENSOR_DISTANCE_CM || averageDistance > MAX_SENSOR_DISTANCE_CM) {
-    Serial.print("⚠️ Average distance out of range: ");
+    Serial.print("WARNING: Average distance out of range: ");
     Serial.print(averageDistance);
     Serial.println(" cm");
     return -1;
   }
 
-  Serial.print("📊 Average distance: ");
+  Serial.print("DATA: Average distance: ");
   Serial.print(averageDistance);
   Serial.println(" cm");
 
@@ -472,7 +527,7 @@ float readSumpUltrasonicLevel() {
   float levelPercent = (waterHeight / SUMP_TANK_HEIGHT_CM) * 100.0;
   levelPercent = constrain(levelPercent, 0, 100);
 
-  Serial.print("💧 Calculated sump level: ");
+  Serial.print("WATER: Calculated sump level: ");
   Serial.print(levelPercent, 1);
   Serial.println("%");
 
@@ -496,7 +551,7 @@ void readControls() {
   if (buttonState == LOW && millis() - lastButtonPress > DEBOUNCE_DELAY) {
     manualButtonPressed = true;
     lastButtonPress = millis();
-    Serial.println("🔘 Manual button pressed!");
+    Serial.println("CIRCLE: Manual button pressed!");
   } else if (buttonState == HIGH) {
     manualButtonPressed = false;
   }
@@ -504,29 +559,85 @@ void readControls() {
 
 // Motor control functions
 // manualOverride = true bypasses rest time and runtime checks for manual control
-void startMotor(bool manualOverride) {
+// Returns true if motor started successfully, false otherwise
+bool startMotor(bool manualOverride) {
+  Serial.println("==========================================");
+  Serial.println("🔄 MOTOR START SEQUENCE - SUMP TANK ESP32");
+  Serial.println("==========================================");
+  Serial.print("🎛️  MODE: ");
+  Serial.println(manualOverride ? "MANUAL OVERRIDE" : "AUTO MODE");
+  Serial.print("🏊 FLOAT SWITCH: ");
+  Serial.println(floatSwitchOn ? "ON (SAFE)" : "OFF (UNSAFE)");
+  Serial.print("📊 SUMP LEVEL: ");
+  Serial.print(sumpLevel, 1);
+  Serial.println("%");
+  Serial.print("⚡ MOTOR CURRENT STATUS: ");
+  Serial.println(motorRunning ? "RUNNING" : "STOPPED");
+
   if (!canMotorStart(manualOverride)) {
-    Serial.println("❌ Motor start blocked by safety checks");
-    return;
+    Serial.println("❌ BLOCKED: Motor start blocked by safety checks");
+    Serial.println("🔍 REASON: See safety check details above");
+    Serial.println("==========================================");
+    return false;
   }
+
+  Serial.println("✅ SAFETY CHECKS PASSED - Starting motor...");
+  Serial.println("🔌 ACTION: Activating motor relay...");
 
   digitalWrite(MOTOR_RELAY_PIN, HIGH);
   motorRunning = true;
   motorStartTime = millis();
   motorStatus = "running";
 
-  Serial.println("🚀 Motor STARTED - Safety checks passed");
+  Serial.println("✅ SUCCESS: Motor STARTED!");
+  Serial.print("⏰ START TIME: ");
+  Serial.println(motorStartTime);
+  Serial.println("📡 SENDING: Motor status update to backend");
+  Serial.println("🚨 SENDING: System alert - motor started");
+
   sendMotorStatus();
+  sendSystemAlert("motor_auto_start", "Motor started automatically - Sump filling, filling top tank");
+
+  Serial.println("==========================================");
+  Serial.println("🎉 MOTOR START SEQUENCE COMPLETED!");
+  Serial.println("==========================================");
+
+  return true;
 }
 
 void stopMotor() {
+  Serial.println("==========================================");
+  Serial.println("🛑 MOTOR STOP SEQUENCE - SUMP TANK ESP32");
+  Serial.println("==========================================");
+  Serial.print("⚡ MOTOR CURRENT STATUS: ");
+  Serial.println(motorRunning ? "RUNNING" : "STOPPED");
+
+  Serial.println("🔌 ACTION: Deactivating motor relay...");
   digitalWrite(MOTOR_RELAY_PIN, LOW);
   motorRunning = false;
   motorLastStopTime = millis();
   motorStatus = "stopped";
 
-  Serial.println("🛑 Motor STOPPED");
+  Serial.println("✅ SUCCESS: Motor STOPPED!");
+  Serial.print("⏰ STOP TIME: ");
+  Serial.println(motorLastStopTime);
+
+  if (motorStartTime > 0) {
+    unsigned long runtime = motorLastStopTime - motorStartTime;
+    Serial.print("⏱️  TOTAL RUNTIME: ");
+    Serial.print(runtime / 1000);
+    Serial.println(" seconds");
+  }
+
+  Serial.println("📡 SENDING: Motor status update to backend");
+  Serial.println("🚨 SENDING: System alert - motor stopped");
+
   sendMotorStatus();
+  sendSystemAlert("motor_auto_stop", "Motor stopped automatically - Top tank is full");
+
+  Serial.println("==========================================");
+  Serial.println("🎉 MOTOR STOP SEQUENCE COMPLETED!");
+  Serial.println("==========================================");
 }
 
 // Safety checks before starting motor with optional manual override
@@ -534,14 +645,14 @@ void stopMotor() {
 bool canMotorStart(bool manualOverride) {
   // Check float switch - CRITICAL SAFETY (always check, even for manual override)
   if (!floatSwitchOn) {
-    Serial.println("🚨 SAFETY: Float switch is OFF - Motor cannot start!");
+    Serial.println("ALERT: SAFETY: Float switch is OFF - Motor cannot start!");
     motorSafetyAlert = true;
     return false;
   }
 
   // Check sump level - prevent dry run (always check, even for manual override)
   if (sumpLevel < SUMP_MIN_LEVEL) {
-    Serial.println("🚨 SAFETY: Sump level too low - Motor cannot start!");
+    Serial.println("ALERT: SAFETY: Sump level too low - Motor cannot start!");
     motorSafetyAlert = true;
     return false;
   }
@@ -550,18 +661,18 @@ bool canMotorStart(bool manualOverride) {
   if (!manualOverride) {
     // Check minimum rest time
     if (millis() - motorLastStopTime < MOTOR_MIN_REST_TIME) {
-      Serial.println("⏳ Motor rest time not elapsed - cannot start yet");
+      Serial.println("HOURGLASS: Motor rest time not elapsed - cannot start yet");
       return false;
     }
 
     // Check maximum runtime
     if (motorRunning && (millis() - motorStartTime) > MOTOR_MAX_RUNTIME) {
-      Serial.println("⏰ Motor exceeded maximum runtime - stopping");
+      Serial.println("CLOCK: Motor exceeded maximum runtime - stopping");
       stopMotor();
       return false;
     }
   } else {
-    Serial.println("🔧 MANUAL OVERRIDE: Bypassing rest time and runtime checks");
+    Serial.println("MANUAL: MANUAL OVERRIDE: Bypassing rest time and runtime checks");
   }
 
   motorSafetyAlert = false;
@@ -573,19 +684,22 @@ void manualMotorControl() {
   // Handle manual motor switch (works in both auto and manual modes with override)
   if (manualMotorOn && !motorRunning) {
     // Switch is ON but motor is OFF - start with manual override
-    startMotor(true);  // true = manual override
-    lastCommandSource = "manual_switch";
-    Serial.println("🔧 MANUAL CONTROL: Motor started via switch with override");
+    if (startMotor(true)) {  // true = manual override
+      lastCommandSource = "manual_switch";
+      Serial.println("MANUAL: MANUAL CONTROL: Motor started via switch with override");
+    } else {
+      Serial.println("ERROR: MANUAL CONTROL: Failed to start motor via switch");
+    }
   } else if (!manualMotorOn && motorRunning && lastCommandSource == "manual_switch") {
     // Switch is OFF and motor was started by switch - stop it
     stopMotor();
-    Serial.println("🔧 MANUAL CONTROL: Motor stopped via switch");
+    Serial.println("MANUAL: MANUAL CONTROL: Motor stopped via switch");
   }
 
   // Handle manual override timer (for button presses)
   if (manualOverride && (millis() - manualOverrideStartTime >= 30000)) {
     manualOverride = false;
-    Serial.println("🔄 Manual override expired - returning to auto mode");
+    Serial.println("REFRESH: Manual override expired - returning to auto mode");
   }
 }
 
@@ -593,7 +707,7 @@ void manualMotorControl() {
 void checkMotorSafety() {
   if (floatSwitchOn && sumpLevel >= SUMP_MIN_LEVEL) {
     if (motorSafetyAlert) {
-      Serial.println("✅ Motor safety conditions restored");
+      Serial.println("SUCCESS: Motor safety conditions restored");
       motorSafetyAlert = false;
     }
   }
@@ -604,23 +718,39 @@ void checkAlerts(float level) {
   String newStatus = "normal";
   bool shouldAlert = false;
 
-  if (level <= SUMP_CRITICAL_LEVEL) {
+  if (level >= 90.0) { // Sump filled alert
     newStatus = "critical";
     if (!criticalLevelAlert) {
       criticalLevelAlert = true;
       shouldAlert = true;
-      Serial.println("🚨 CRITICAL: Sump tank water level extremely low!");
+      Serial.println("ALERT: CRITICAL: Sump tank filled to 90%!");
+      sendSystemAlert("sump_filled", "Sump tank is completely filled - Buzzer activated 5 times");
+    }
+  } else if (level >= 85.0) { // Sump 90% alert
+    newStatus = "warning";
+    if (!lowLevelAlert) {
+      lowLevelAlert = true;
+      shouldAlert = true;
+      Serial.println("WARNING: WARNING: Sump tank reached 90% capacity");
+      sendSystemAlert("sump_90_percent", "Sump tank reached 90% capacity - Buzzer activated");
+    }
+  } else if (level <= SUMP_CRITICAL_LEVEL) {
+    newStatus = "critical";
+    if (!criticalLevelAlert) {
+      criticalLevelAlert = true;
+      shouldAlert = true;
+      Serial.println("ALERT: CRITICAL: Sump tank water level extremely low!");
     }
   } else if (level <= 20.0) { // Low level threshold
     newStatus = "warning";
     if (!lowLevelAlert) {
       lowLevelAlert = true;
       shouldAlert = true;
-      Serial.println("⚠️ WARNING: Sump tank water level getting low");
+      Serial.println("WARNING: WARNING: Sump tank water level getting low");
     }
   } else {
     if (lowLevelAlert || criticalLevelAlert) {
-      Serial.println("✅ Sump tank water level back to normal");
+      Serial.println("SUCCESS: Sump tank water level back to normal");
     }
     lowLevelAlert = false;
     criticalLevelAlert = false;
@@ -630,7 +760,7 @@ void checkAlerts(float level) {
   if (motorSafetyAlert) {
     newStatus = "critical";
     shouldAlert = true;
-    Serial.println("🚨 MOTOR SAFETY ALERT: Motor operation blocked!");
+    Serial.println("ALERT: MOTOR SAFETY ALERT: Motor operation blocked!");
   }
 
   // Visual/audio alerts
@@ -696,7 +826,25 @@ void sendSensorData() {
   serializeJson(doc, jsonString);
   webSocket.sendTXT(jsonString);
 
-  Serial.println("📊 Sump sensor data sent - Level: " + String(sumpLevel, 1) + "%, Motor: " + motorStatus);
+  Serial.println("DATA: Sump sensor data sent - Level: " + String(sumpLevel, 1) + "%, Motor: " + motorStatus);
+}
+
+// Send tank reading data to server (for frontend compatibility)
+void sendTankReading() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "tank_reading";
+  doc["tank_type"] = "sump_tank";
+  doc["level_percentage"] = sumpLevel;
+  doc["level_liters"] = sumpVolume;
+  doc["sensor_health"] = "good";
+  doc["esp32_id"] = DEVICE_ID;
+  doc["timestamp"] = millis();
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+  webSocket.sendTXT(jsonString);
+
+  Serial.println("DATA: Sump tank reading sent - Level: " + String(sumpLevel, 1) + "%");
 }
 
 // Send motor status to server
@@ -715,8 +863,26 @@ void sendMotorStatus() {
   serializeJson(doc, jsonString);
   webSocket.sendTXT(jsonString);
 
-  Serial.print("📊 Motor status sent: ");
+  Serial.print("DATA: Motor status sent: ");
   Serial.println(motorStatus);
+}
+
+// Send system alert to server
+void sendSystemAlert(String alertType, String message) {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "system_alert";
+  doc["alert_type"] = alertType;
+  doc["message"] = message;
+  doc["esp32_id"] = DEVICE_ID;
+  doc["level_percentage"] = sumpLevel;
+  doc["timestamp"] = millis();
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+  webSocket.sendTXT(jsonString);
+
+  Serial.print("ALERT: System alert sent: ");
+  Serial.println(alertType);
 }
 
 // Send ping to keep connection alive
@@ -726,7 +892,7 @@ void sendPing() {
   String jsonString;
   serializeJson(doc, jsonString);
   webSocket.sendTXT(jsonString);
-  Serial.println("🏓 Ping sent");
+  Serial.println("PING: Ping sent");
 }
 
 // Get connection state as string for debugging
@@ -760,7 +926,7 @@ void attemptWebSocketReconnection() {
     return; // Too soon to retry
   }
 
-  Serial.print("🔄 Attempting WebSocket reconnection (attempt ");
+  Serial.print("REFRESH: Attempting WebSocket reconnection (attempt ");
   Serial.print(connectionAttempts + 1);
   Serial.print("/");
   Serial.print(MAX_CONNECTION_ATTEMPTS);
@@ -772,20 +938,21 @@ void attemptWebSocketReconnection() {
   connectionAttempts++;
   lastConnectionAttempt = now;
 
-  webSocket.beginSSL(SUPABASE_URL, 443, WEBSOCKET_PATH);
-  webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY);
+  webSocket.begin(SUPABASE_URL, WEBSOCKET_PORT, WEBSOCKET_PATH);
+  // webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY); // Not needed for local backend
 }
 
 // WebSocket event handler (IMPROVED)
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+  Serial.print("WEBSOCKET: WebSocket Event: ");
   switch(type) {
     case WStype_DISCONNECTED:
-      Serial.println("🔌 WebSocket disconnected");
+      Serial.println("DISCONNECTED");
       websocketConnected = false;
       backendResponsive = false;
 
       if (connectionState == STABLE) {
-        Serial.println("⚠️ Stable connection lost - entering reconnection mode");
+        Serial.println("WARNING: Stable connection lost - entering reconnection mode");
         connectionState = RECONNECTING;
         connectionAttempts = 0; // Reset attempts for reconnection
       } else {
@@ -794,7 +961,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       break;
 
     case WStype_CONNECTED:
-      Serial.println("✅ WebSocket connected successfully!");
+      Serial.println("CONNECTED");
       websocketConnected = true;
       backendResponsive = true;
       connectionEstablishedTime = millis();
@@ -802,7 +969,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
       if (connectionState != STABLE) {
         connectionState = CONNECTED;
-        Serial.println("🔄 Connection established - monitoring for stability");
+        Serial.println("REFRESH: Connection established - monitoring for stability");
       }
 
       // Send device registration
@@ -816,32 +983,40 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         String jsonString;
         serializeJson(doc, jsonString);
         webSocket.sendTXT(jsonString);
-        Serial.println("📡 ESP32 registered with server");
+        Serial.println("ANTENNA: ESP32 registered with server");
       }
       break;
 
     case WStype_TEXT:
       {
+        Serial.print("RECEIVED: Received TEXT message: ");
+        Serial.println((char*)payload);
+
         StaticJsonDocument<256> doc;
         DeserializationError error = deserializeJson(doc, payload, length);
 
         if (!error) {
           String messageType = doc["type"];
+          Serial.print("NOTE: Message type: ");
+          Serial.println(messageType);
 
           if (messageType == "get_status") {
             sendSensorData();
             sendMotorStatus();
-            Serial.println("📋 Status sent on request");
+            Serial.println("CLIPBOARD: Status sent on request");
           } else if (messageType == "motor_control") {
             bool motorState = doc["state"];
-            Serial.print("🎮 Motor control command received: ");
+            Serial.print("GAME: Motor control command received: ");
             Serial.println(motorState ? "START" : "STOP");
 
             manualOverride = true;
             manualOverrideStartTime = millis(); // Start the timer
 
             if (motorState) {
-              startMotor(true);  // Manual override for WebSocket motor control
+              bool success = startMotor(true);  // Manual override for WebSocket motor control
+              if (!success) {
+                Serial.println("ERROR: WebSocket motor start failed - safety checks failed");
+              }
             } else {
               stopMotor();
             }
@@ -849,10 +1024,10 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             // Manual override will be reset by manualMotorControl() after 30 seconds
           } else if (messageType == "auto_mode_control") {
             autoModeEnabled = doc["enabled"];
-            Serial.print("🤖 Auto mode ");
+            Serial.print("ROBOT: Auto mode ");
             Serial.println(autoModeEnabled ? "ENABLED" : "DISABLED");
           } else if (messageType == "pong") {
-            Serial.println("🏓 Pong received - connection is alive");
+            Serial.println("PING: Pong received - connection is alive");
             lastHeartbeatResponse = millis();
             heartbeatMissedCount = 0;
             backendResponsive = true;
@@ -860,17 +1035,25 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             // Upgrade to stable connection after successful pong
             if (connectionState == CONNECTED && (millis() - connectionEstablishedTime) > 60000) {
               connectionState = STABLE;
-              Serial.println("🔒 Connection stabilized - no unnecessary restarts");
+              Serial.println("LOCK: Connection stabilized - no unnecessary restarts");
             }
 
-            Serial.println("💚 Heartbeat response confirmed - system healthy");
+            Serial.println("GREEN: Heartbeat response confirmed - system healthy");
           }
         }
       }
       break;
 
     case WStype_ERROR:
-      Serial.println("❌ WebSocket Error!");
+      Serial.println("ERROR: WebSocket Error!");
+      Serial.print("SEARCH: Error details - Length: ");
+      Serial.print(length);
+      Serial.print(", Payload: ");
+      if (payload && length > 0) {
+        Serial.println((char*)payload);
+      } else {
+        Serial.println("No payload");
+      }
       websocketConnected = false;
       backendResponsive = false;
       websocketErrorCount++;
@@ -879,7 +1062,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         connectionState = RECONNECTING;
       }
 
-      Serial.print("🔍 WebSocket error count: ");
+      Serial.print("SEARCH: WebSocket error count: ");
       Serial.println(websocketErrorCount);
       break;
   }
@@ -888,13 +1071,13 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 // Connect to WiFi with comprehensive error handling and retry logic
 void connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("ℹ️ WiFi already connected");
+    Serial.println("INFO:TEXT: WiFi already connected");
     return;
   }
 
   // Check if using placeholder credentials
   if (strcmp(WIFI_SSID, "Your_WiFi_Name") == 0 || strcmp(WIFI_PASSWORD, "Your_WiFi_Password") == 0) {
-    Serial.println("❌ ERROR: WiFi credentials not configured!");
+    Serial.println("ERROR: ERROR: WiFi credentials not configured!");
     Serial.println("   Please update WIFI_SSID and WIFI_PASSWORD in the configuration section");
     Serial.println("   Current values:");
     Serial.print("   SSID: ");
@@ -905,7 +1088,7 @@ void connectToWiFi() {
     return;
   }
 
-  Serial.print("🔄 Connecting to WiFi: ");
+  Serial.print("REFRESH: Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
 
   WiFi.disconnect();
@@ -940,7 +1123,7 @@ void connectToWiFi() {
 
     // Reset WiFi every 10 attempts if still failing
     if (attempts % 10 == 0 && attempts < MAX_ATTEMPTS) {
-      Serial.println("\n🔄 Resetting WiFi connection...");
+      Serial.println("\nREFRESH: Resetting WiFi connection...");
       WiFi.disconnect();
       delay(1000);
       WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -948,10 +1131,10 @@ void connectToWiFi() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi connected successfully!");
-    Serial.print("📡 IP Address: ");
+    Serial.println("\nSUCCESS: WiFi connected successfully!");
+    Serial.print("ANTENNA: IP Address: ");
     Serial.println(WiFi.localIP());
-    Serial.print("📶 Signal Strength (RSSI): ");
+    Serial.print("SIGNAL: Signal Strength (RSSI): ");
     Serial.print(WiFi.RSSI());
     Serial.println(" dBm");
     wifiConnected = true;
@@ -959,8 +1142,8 @@ void connectToWiFi() {
     wifiConnectionStable = false; // Will be set to true after stability period
     connectionState = CONNECTING; // Ready to attempt WebSocket connection
   } else {
-    Serial.println("\n❌ WiFi connection failed after maximum attempts!");
-    Serial.print("🔍 Last WiFi status: ");
+    Serial.println("\nERROR: WiFi connection failed after maximum attempts!");
+    Serial.print("SEARCH: Last WiFi status: ");
     switch (WiFi.status()) {
       case WL_NO_SSID_AVAIL:
         Serial.println("No SSID available");
@@ -986,44 +1169,45 @@ void connectToWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\n=== Aqua Guard Sense ESP32 Sump Tank + Motor Controller v2.0 (IMPROVED) ===");
+  Serial.println("START: ESP32 STARTUP - Device restarted or powered on");
   Serial.println("Sump Tank Sensor: AJ-SR04M Ultrasonic Sensor (TRIG/ECHO)");
   Serial.println("Safety: Float Switch + Dual Verification");
   Serial.println("Motor Control: Relay + Manual Override Button");
   Serial.print("Sump Tank: ");
   Serial.print(SUMP_TANK_LENGTH_CM);
-  Serial.print("cm × ");
+  Serial.print("cm x ");
   Serial.print(SUMP_TANK_BREADTH_CM);
-  Serial.print("cm × ");
+  Serial.print("cm x ");
   Serial.print(SUMP_TANK_HEIGHT_CM);
-  Serial.println("cm (Length × Breadth × Height)");
+  Serial.println("cm (Length x Breadth x Height)");
 
-  Serial.println("\n⚠️  IMPORTANT WIRING:");
+  Serial.println("\nWARNING:  IMPORTANT WIRING:");
   Serial.println("   SUMP TANK AJ-SR04M:");
-  Serial.println("   • TRIG → ESP32 GPIO 5");
-  Serial.println("   • ECHO → ESP32 GPIO 18");
-  Serial.println("   • GND → ESP32 GND");
-  Serial.println("   • VCC → ESP32 5V");
+  Serial.println("   - TRIG -> ESP32 GPIO 5");
+  Serial.println("   - ECHO -> ESP32 GPIO 18");
+  Serial.println("   - GND -> ESP32 GND");
+  Serial.println("   - VCC -> ESP32 5V");
   Serial.println("   CONTROLS:");
-  Serial.println("   • FLOAT SWITCH → ESP32 GPIO 4");
-  Serial.println("   • MANUAL BUTTON → ESP32 GPIO 12");
-  Serial.println("   • MOTOR RELAY → ESP32 GPIO 13");
+  Serial.println("   - FLOAT SWITCH -> ESP32 GPIO 4");
+  Serial.println("   - MANUAL BUTTON -> ESP32 GPIO 12");
+  Serial.println("   - MOTOR RELAY -> ESP32 GPIO 13");
   Serial.println("   ALERTS:");
-  Serial.println("   • BUZZER → ESP32 GPIO 14");
-  Serial.println("   • LED → ESP32 GPIO 15");
+  Serial.println("   - BUZZER -> ESP32 GPIO 14");
+  Serial.println("   - LED -> ESP32 GPIO 15");
 
-  Serial.println("\n⚠️  CRITICAL SAFETY NOTES:");
-  Serial.println("   • Sensor CANNOT detect below 20cm - readings will be wrong!");
-  Serial.println("   • Float switch prevents motor start when water is too low");
-  Serial.println("   • Manual button allows emergency motor control");
-  Serial.println("   • Motor has 30-minute timeout for safety");
-  Serial.println("   • IMPROVED: No auto-restart on connection issues");
-  Serial.println("   • IMPROVED: Stable connection management");
-  Serial.println("   • IMPROVED: Crash-only restart policy");
+  Serial.println("\nWARNING:  CRITICAL SAFETY NOTES:");
+  Serial.println("   - Sensor CANNOT detect below 20cm - readings will be wrong!");
+  Serial.println("   - Float switch prevents motor start when water is too low");
+  Serial.println("   - Manual button allows emergency motor control");
+  Serial.println("   - Motor has 30-minute timeout for safety");
+  Serial.println("   - FORBIDDEN: NO AUTO-RESTART POLICY: Only restarts on PANIC/CRASH");
+  Serial.println("   - REFRESH: Only heartbeat sent to backend, no forced restarts");
+  Serial.println("   - WATCHDOG: Watchdog timeout increased to 60s for stability");
 
   // Initialize pins
   pinMode(SUMP_TRIGPIN, OUTPUT);
   pinMode(SUMP_ECHOPIN, INPUT);
-  Serial.println("✅ Sump tank AJ-SR04M initialized");
+  Serial.println("SUCCESS: Sump tank AJ-SR04M initialized");
 
   pinMode(FLOAT_SWITCH_PIN, INPUT_PULLUP);
   pinMode(MANUAL_BUTTON_PIN, INPUT_PULLUP);
@@ -1040,10 +1224,10 @@ void setup() {
   pinMode(MANUAL_MOTOR_SWITCH_PIN, INPUT_PULLUP);
   pinMode(MODE_SWITCH_PIN, INPUT_PULLUP);
 
-  Serial.println("✅ Control pins initialized");
+  Serial.println("SUCCESS: Control pins initialized");
 
   // Initialize Watchdog Timer
-  Serial.print("🔒 Initializing Watchdog Timer (");
+  Serial.print("LOCK: Initializing Watchdog Timer (");
   Serial.print(WDT_TIMEOUT);
   Serial.println("s timeout)...");
 
@@ -1058,13 +1242,13 @@ void setup() {
   esp_task_wdt_init(&wdt_config); // Enable panic reset
   esp_task_wdt_add(NULL); // Add current task to watchdog
   lastWatchdogFeed = millis();
-  Serial.println("✅ Watchdog Timer initialized");
+  Serial.println("SUCCESS: Watchdog Timer initialized");
 
   // Prevent ESP32 from going to sleep
-  Serial.println("☕ Preventing ESP32 sleep mode...");
+  Serial.println("COFFEE: Preventing ESP32 sleep mode...");
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   WiFi.setSleep(false);  // Disable WiFi sleep to maintain connection
-  Serial.println("✅ Sleep prevention enabled");
+  Serial.println("SUCCESS: Sleep prevention enabled");
 
   // Test sensors
   testAJ_SR04MCommunication();
@@ -1079,7 +1263,7 @@ void setup() {
   digitalWrite(SUMP_FULL_LED_PIN, LOW);   // Sump full LED OFF
   digitalWrite(SUMP_LOW_LED_PIN, LOW);    // Sump low LED OFF
 
-  Serial.println("✅ All outputs set to OFF state");
+  Serial.println("SUCCESS: All outputs set to OFF state");
 
   // Connect to WiFi
   connectToWiFi();
@@ -1090,22 +1274,24 @@ void setup() {
     server.on("/motor", HTTP_POST, handleMotorCommand);
     server.on("/status", HTTP_GET, handleStatus);
     server.begin();
-    Serial.println("🌐 HTTP Server started on port 80");
-    Serial.print("📍 HTTP Server URL: http://");
+    Serial.println("WEB: HTTP Server started on port 80");
+    Serial.print("LOCATION: HTTP Server URL: http://");
     Serial.println(WiFi.localIP());
   }
 
   // Initialize WebSocket
   if (wifiConnected) {
-    Serial.println("🔄 Initializing WebSocket connection...");
-    webSocket.beginSSL(SUPABASE_URL, 443, WEBSOCKET_PATH);
+    Serial.println("REFRESH: Initializing WebSocket connection...");
+    webSocket.begin(SUPABASE_URL, WEBSOCKET_PORT, WEBSOCKET_PATH);
     webSocket.onEvent(webSocketEvent);
-    webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY);
+    // webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY); // Not needed for local backend
+    // webSocket.setExtraHeaders("apikey: ..."); // Not needed for local backend
+
     connectionState = CONNECTING;
   }
 
   Serial.println("========== Setup Complete ==========");
-  Serial.println("\n🚀 NEXT STEPS:");
+  Serial.println("\nSTART: NEXT STEPS:");
   Serial.println("1. Check serial output for sensor test results");
   Serial.println("2. Monitor sump tank levels every 3 seconds");
   Serial.println("3. Test manual button for motor control");
@@ -1116,11 +1302,17 @@ void setup() {
 
 // ========== MAIN LOOP ==========
 void loop() {
-  // Feed watchdog timer periodically
+  // Feed watchdog timer periodically (MORE FREQUENT) with safeguard
   if (millis() - lastWatchdogFeed > WATCHDOG_FEED_INTERVAL) {
+    // Safeguard: Don't feed if it's been less than 1 second (prevents infinite loop detection)
+    if (millis() - lastWatchdogFeed < 1000) {
+      Serial.println("ALERT: WARNING: Watchdog being fed too frequently - possible infinite loop!");
+      delay(1000); // Brief delay to prevent rapid feeding
+    }
+
     esp_task_wdt_reset();
     lastWatchdogFeed = millis();
-    Serial.println("🐕 Watchdog fed");
+    Serial.println("WATCHDOG: Watchdog fed - System healthy");
   }
 
   webSocket.loop();
@@ -1128,6 +1320,10 @@ void loop() {
 
   // Read sensors and controls periodically
   if (millis() - lastSensorRead > 3000) {
+    // Feed watchdog before sensor reading
+    esp_task_wdt_reset();
+    Serial.println("WATCHDOG: Watchdog fed before sensor reading");
+
     // Read sump tank level
     float newLevel = readSumpUltrasonicLevel();
     if (newLevel >= 0) {
@@ -1135,7 +1331,7 @@ void loop() {
       sumpVolume = calculateSumpVolume(sumpLevel);
       checkAlerts(sumpLevel);
 
-      Serial.print("🏊 Sump Tank Level: ");
+      Serial.print("SWIM: Sump Tank Level: ");
       Serial.print(sumpLevel, 1);
       Serial.print("% | Volume: ");
       Serial.print(sumpVolume, 1);
@@ -1145,10 +1341,10 @@ void loop() {
       Serial.println(" cm");
 
       if (sumpLevel > 85) {
-        Serial.println("⚠️ CRITICAL: High sump level - sensor cannot detect < 20cm!");
+        Serial.println("WARNING: CRITICAL: High sump level - sensor cannot detect < 20cm!");
       }
     } else {
-      Serial.println("❌ Sump AJ-SR04M sensor error - invalid reading");
+      Serial.println("ERROR: Sump AJ-SR04M sensor error - invalid reading");
     }
 
     // Read controls
@@ -1178,26 +1374,31 @@ void loop() {
 
     // More frequent heartbeat (every 30 seconds)
     if (millis() - lastHeartbeat > 30000) {
+      // Feed watchdog before sending data
+      esp_task_wdt_reset();
+      Serial.println("WATCHDOG: Watchdog fed before heartbeat");
+
       sendSensorData();
+      sendTankReading(); // Send tank reading for frontend compatibility
       lastHeartbeat = millis();
-      Serial.println("💓 Heartbeat sent");
+      Serial.println("HEARTBEAT: Heartbeat sent - NO RESTART POLICY ACTIVE");
     }
 
-    // IMPROVED: Only log warnings, no auto-restart
+    // IMPROVED: Only log warnings, NO AUTO-RESTART
     if (millis() - lastHeartbeatResponse > HEARTBEAT_TIMEOUT) {
       heartbeatMissedCount++;
       backendResponsive = false;
 
-      Serial.print("⚠️ Heartbeat response timeout! Missed count: ");
+      Serial.print("WARNING: Heartbeat response timeout! Missed count: ");
       Serial.print(heartbeatMissedCount);
       Serial.print(" (Connection State: ");
       Serial.print(getConnectionStateString());
-      Serial.println(")");
+      Serial.println(") - CONTINUING OPERATION, NO RESTART");
 
       if (heartbeatMissedCount >= 5) {  // After 5 missed heartbeats (10 minutes)
-        Serial.println("🚨 WARNING: Backend not responsive for 10+ minutes!");
-        Serial.println("🔄 Attempting reconnection but NOT restarting ESP32");
-        Serial.println("💡 System will continue operating and attempt reconnection");
+        Serial.println("ALERT: WARNING: Backend not responsive for 10+ minutes!");
+        Serial.println("REFRESH: Attempting reconnection but NOT restarting ESP32");
+        Serial.println("BULB: System will continue operating and attempt reconnection");
 
         if (connectionState == STABLE) {
           connectionState = RECONNECTING;
@@ -1223,7 +1424,7 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     if (!wifiConnectionStable && millis() - wifiLastConnectedTime > WIFI_STABILITY_CHECK_TIME) {
       wifiConnectionStable = true;
-      Serial.println("🔒 WiFi connection stable (10s confirmation period passed)");
+      Serial.println("LOCK: WiFi connection stable (10s confirmation period passed)");
     }
   } else {
     wifiConnectionStable = false;
@@ -1232,7 +1433,7 @@ void loop() {
   // Reconnect WiFi only if truly disconnected and stable connection was lost
   if (WiFi.status() != WL_CONNECTED && wifiConnectionStable) {
     if (wifiConnected) {
-      Serial.println("⚠️ WiFi disconnected! (confirmed after stability check)");
+      Serial.println("WARNING: WiFi disconnected! (confirmed after stability check)");
       wifiConnected = false;
       websocketConnected = false;
       connectionState = DISCONNECTED;
@@ -1242,7 +1443,7 @@ void loop() {
 
     // Only attempt reconnection every 30 seconds to avoid constant retry loops
     if (millis() - lastWifiReconnectAttempt > 30000) {
-      Serial.println("🔄 Attempting WiFi reconnection...");
+      Serial.println("REFRESH: Attempting WiFi reconnection...");
       connectToWiFi();
       lastWifiReconnectAttempt = millis();
     }
@@ -1252,10 +1453,10 @@ void loop() {
   static unsigned long lastHealthCheck = 0;
   if (wifiConnectionStable && millis() - lastHealthCheck > 300000) { // 5 minutes
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("💚 WiFi health check passed");
+      Serial.println("GREEN: WiFi health check passed");
       lastHealthCheck = millis();
     } else {
-      Serial.println("⚠️ WiFi health check failed - connection unstable");
+      Serial.println("WARNING: WiFi health check failed - connection unstable");
       wifiConnectionStable = false;
       wifiConnected = false;
       websocketConnected = false;
@@ -1265,16 +1466,16 @@ void loop() {
   // Connection status monitoring
   static unsigned long lastStatusLog = 0;
   if (millis() - lastStatusLog > 60000) {  // Log status every minute
-    Serial.print("📊 Status: WiFi=");
-    Serial.print(wifiConnected ? "✅" : "❌");
+    Serial.print("DATA: Status: WiFi=");
+    Serial.print(wifiConnected ? "SUCCESS:" : "ERROR:");
     Serial.print(" | WS=");
-    Serial.print(websocketConnected ? "✅" : "❌");
+    Serial.print(websocketConnected ? "SUCCESS:" : "ERROR:");
     Serial.print(" | State=");
     Serial.print(getConnectionStateString());
     Serial.print(" | Backend=");
-    Serial.print(backendResponsive ? "✅" : "❌");
+    Serial.print(backendResponsive ? "SUCCESS:" : "ERROR:");
     Serial.print(" | Motor=");
-    Serial.print(motorRunning ? "✅" : "❌");
+    Serial.print(motorRunning ? "SUCCESS:" : "ERROR:");
     Serial.print(" | Level=");
     Serial.print(sumpLevel, 1);
     Serial.println("%");
@@ -1292,8 +1493,27 @@ void updateLedIndicators() {
   // LED 2: Sump water full (90% level)
   digitalWrite(SUMP_FULL_LED_PIN, (sumpLevel >= 90.0) ? HIGH : LOW);
 
-  // LED 3: Sump water low (25% level)
-  digitalWrite(SUMP_LOW_LED_PIN, (sumpLevel <= 25.0) ? HIGH : LOW);
+  // LED 3: Sump water level indicator
+  static unsigned long lastBlinkTime = 0;
+  static bool blinkState = false;
+  
+  if (sumpLevel <= 10.0) {
+    // LED ON when empty
+    digitalWrite(SUMP_LOW_LED_PIN, HIGH);
+  } else if (sumpLevel >= 85.0 && sumpLevel < 90.0) {
+    // Blinking at 85%
+    if (millis() - lastBlinkTime > 500) { // Blink every 500ms
+      blinkState = !blinkState;
+      lastBlinkTime = millis();
+    }
+    digitalWrite(SUMP_LOW_LED_PIN, blinkState ? HIGH : LOW);
+  } else if (sumpLevel >= 90.0) {
+    // Steady ON at 90%
+    digitalWrite(SUMP_LOW_LED_PIN, HIGH);
+  } else {
+    // OFF for other levels
+    digitalWrite(SUMP_LOW_LED_PIN, LOW);
+  }
 }
 
 // ========== SWITCH CONTROL FUNCTIONS ==========
@@ -1312,13 +1532,13 @@ void readModeSwitch() {
     if (currentState == LOW && lastModeSwitchState == HIGH) {
       // Switch pressed (toggle mode)
       autoModeEnabled = !autoModeEnabled;
-      Serial.print("🔄 Mode switched to: ");
+      Serial.print("REFRESH: Mode switched to: ");
       Serial.println(autoModeEnabled ? "AUTO" : "MANUAL");
 
       // If switching to manual mode, stop auto motor control
       if (!autoModeEnabled && motorRunning && lastCommandSource == "auto") {
         stopMotor();
-        Serial.println("🛑 Auto motor stopped due to manual mode switch");
+        Serial.println("STOP: Auto motor stopped due to manual mode switch");
       }
     }
   }
@@ -1343,13 +1563,18 @@ void readManualMotorSwitch() {
         // If motor was started by manual switch and is running, stop it
         stopMotor();
         manualMotorOn = false;
-        Serial.println("🔘 MANUAL SWITCH: Motor stopped (toggle OFF)");
+        Serial.println("CIRCLE: MANUAL SWITCH: Motor stopped (toggle OFF)");
       } else {
         // Start motor with manual override (bypasses safety checks except critical ones)
-        startMotor(true);  // true = manual override
-        lastCommandSource = "manual_switch";
-        manualMotorOn = true;
-        Serial.println("🔘 MANUAL SWITCH: Motor started with manual override (toggle ON)");
+        bool success = startMotor(true);  // true = manual override
+        if (success) {
+          lastCommandSource = "manual_switch";
+          manualMotorOn = true;
+          Serial.println("CIRCLE: MANUAL SWITCH: Motor started with manual override (toggle ON)");
+        } else {
+          Serial.println("ERROR: MANUAL SWITCH: Failed to start motor - safety checks failed");
+          manualMotorOn = false;
+        }
       }
     }
   }

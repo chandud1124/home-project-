@@ -18,7 +18,7 @@ interface EnhancedTankMonitorProps {
     connected: boolean;
     wifiStrength: number;
     lastSeen: Date;
-    connectionState?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable';
+    connectionState?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
     backendResponsive?: boolean;
     heartbeatMissed?: number;
     uptime?: number;
@@ -147,7 +147,8 @@ export const EnhancedTankMonitor = ({
       case 'stable': return <CheckCircle className="w-4 h-4 text-success" />;
       case 'connected': return <CheckCircle className="w-4 h-4 text-success" />;
       case 'connecting': return <Wifi className="w-4 h-4 text-warning animate-pulse" />;
-      case 'reconnecting': return <AlertTriangle className="w-4 h-4 text-warning animate-pulse" />;
+      case 'reconnecting': return <Wifi className="w-4 h-4 text-warning animate-pulse" />;
+      case 'stale': return <AlertTriangle className="w-4 h-4 text-amber-500" />;
       default: return <AlertTriangle className="w-4 h-4 text-destructive" />;
     }
   };
@@ -158,6 +159,7 @@ export const EnhancedTankMonitor = ({
       case 'connected': return 'Connected';
       case 'connecting': return 'Connecting...';
       case 'reconnecting': return 'Reconnecting...';
+      case 'stale': return 'Stale Data';
       default: return 'Disconnected';
     }
   };

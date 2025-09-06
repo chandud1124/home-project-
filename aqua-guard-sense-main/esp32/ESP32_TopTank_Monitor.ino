@@ -110,6 +110,7 @@ const float MAX_SENSOR_DISTANCE_CM = 450.0; // Maximum detection distance
 #include <HTTPClient.h>
 #include <esp_task_wdt.h>  // ESP32 Watchdog Timer
 #include <mbedtls/md.h>
+#include <time.h>
 
 // ========== WATCHDOG CONFIGURATION ==========
 #define WDT_TIMEOUT 60  // Watchdog timeout in seconds (INCREASED from 30s)
@@ -136,6 +137,18 @@ const unsigned long BASE_RECONNECT_DELAY = 5000; // 5 seconds base delay
 const unsigned long MAX_RECONNECT_DELAY = 300000; // 5 minutes max delay
 
 // ===== HTTPS POST SUPPORT (NEW BACKEND) =====
+bool ensureTimeSynced() {
+  time_t now = time(nullptr);
+  if (now < 1700000000) {
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    for (int i = 0; i < 20; i++) { // wait up to ~10s
+      delay(500);
+      now = time(nullptr);
+      if (now >= 1700000000) break;
+    }
+  }
+  return now >= 1700000000;
+}
 String generateHMACSignatureTop(const String &payload, const String &timestamp) {
   // Combine device_id + payload + timestamp similar to sump device for consistency
   String dataToSign = String(DEVICE_ID) + payload + timestamp;
@@ -726,7 +739,11 @@ void sendSensorData() {
   outer["type"] = "sensor_data";
   outer["data"] = doc; // doc has type + payload
   String jsonBody; serializeJson(outer, jsonBody);
-  String ts = String(millis()/1000);
+  if (!ensureTimeSynced()) {
+    Serial.println("TIME: NTP sync failed, using millis-based fallback timestamp");
+  }
+  time_t epochNow = time(nullptr);
+  String ts = String(epochNow >= 1700000000 ? epochNow : (millis()/1000));
   String sig = generateHMACSignatureTop(jsonBody, ts);
 
   Serial.println("📦 JSON PAYLOAD:");
@@ -751,7 +768,8 @@ void sendPing() {
   Serial.print("🏷️  ESP32 ID: ");
   Serial.println(DEVICE_ID);
   Serial.print("⏰ TIMESTAMP: ");
-  Serial.println(millis());
+  time_t epochPing = time(nullptr);
+  Serial.println(epochPing >= 1700000000 ? epochPing : millis());
 
   StaticJsonDocument<64> inner;
   inner["type"] = "ping";
@@ -763,7 +781,11 @@ void sendPing() {
   outer["type"] = "ping";
   outer["data"] = inner;
   String jsonBody; serializeJson(outer, jsonBody);
-  String ts = String(millis()/1000);
+  if (!ensureTimeSynced()) {
+    Serial.println("TIME: NTP sync failed, using millis-based fallback timestamp (ping)");
+  }
+  time_t epochPingSig = time(nullptr);
+  String ts = String(epochPingSig >= 1700000000 ? epochPingSig : (millis()/1000));
   String sig = generateHMACSignatureTop(jsonBody, ts);
 
   Serial.println("📦 PING PAYLOAD:");

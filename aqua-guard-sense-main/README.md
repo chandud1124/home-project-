@@ -1,3 +1,127 @@
+# Aqua Guard Sense
+
+A comprehensive IoT solution for monitoring and controlling water tank systems with ESP32 devices, featuring real-time monitoring, automated motor control, and AI-powered analytics.
+## Tech Stack
+
+React + Vite + TypeScript, TailwindCSS (shadcn/radix UI), Supabase (Postgres + Auth + Realtime potential), Firebase Hosting (static frontend delivery), Node/Express backend (real‑time WebSocket + REST), ESP32 firmware (sensor + motor control).
+## Environments & Configuration
+
+Frontend (Vite) expects a `.env.local` populated from `.env.example`.
+Backend (Express in `backend/`) expects a `.env` based on `backend/.env.example`.
+
+Key variables:
+- SUPABASE_URL / VITE_SUPABASE_URL: Project base URL
+- SUPABASE_ANON_KEY / VITE_SUPABASE_ANON_KEY: Public anon key (frontend safe)
+- SUPABASE_SERVICE_ROLE_KEY: (Backend only) Never expose client side
+- PORT / WS_PORT: HTTP + WebSocket ports (defaults 3001 / 8083)
+
+## Deployment Overview
+
+1. Supabase: Run migrations (`supabase db push` or CLI) to provision schema & policies.
+2. Backend: Deploy on a VM / container (bind 0.0.0.0, ensure env vars set). Optionally behind a reverse proxy (Caddy / Nginx) with HTTPS.
+3. Frontend: `npm run build` then `firebase deploy --only hosting` (uses `firebase.json`). Supply Vite env vars at build time.
+4. Devices (ESP32): Point firmware to backend public host (NOT the Firebase hosting domain; Firebase only serves static assets). Use full URL: `http://your-backend-domain/api/esp32/...`.
+
+## Firebase vs Supabase Roles
+
+Firebase Hosting: Serves compiled SPA, optional CDN edge caching.
+Supabase: Database, future auth, row-level security, (optional) realtime channels.
+Express Backend: Device ingestion, motor logic, WebSocket broadcast; can be reduced if you migrate logic into Supabase edge functions.
+
+## Security Hardening Checklist
+
+- [ ] Rotate any leaked anon/service keys after removing hardcoded values
+- [ ] Replace permissive RLS policies with principle-of-least-privilege (device row scoping)
+- [ ] Add auth middleware for control endpoints (`motor`, `alerts`, `device` config)
+- [ ] Enforce HTTPS externally; redirect HTTP
+- [ ] Add rate limiting + basic request validation (Zod)
+
+## Local Development Quick Start
+
+```bash
+pnpm install # or npm install
+cp .env.example .env.local
+cp backend/.env.example backend/.env
+# Fill in Supabase project values
+pnpm --filter water-tank-backend run dev & # if using workspaces; otherwise cd backend && npm run dev
+npm run dev # root - starts Vite frontend on 8081
+```
+
+Backend will log Supabase connectivity status on startup. Visit http://localhost:8081.
+
+## ESP32 Endpoint Summary
+
+HTTP POST endpoints:
+- /api/esp32/sensor-data
+- /api/esp32/heartbeat
+- /api/esp32/motor-status
+- /api/esp32/register
+
+WebSocket (ws://host:WS_PORT):
+- Registration message `{ type: 'esp32_register', esp32_id, ... }`
+- Sensor updates `{ type: 'sensor_data', payload: { ... } }`
+
+### Device Auth Headers (New)
+All protected ESP32 POST endpoints now expect:
+```
+x-device-id: <DEVICE_ID>
+x-api-key: <DEVICE_API_KEY>
+// Optional when HMAC enabled (DEVICE_HMAC_REQUIRED=true)
+x-signature: <hex sha256 hmac>
+x-timestamp: <unix seconds>
+```
+Signature input = device_id + raw_json_body + timestamp.
+
+### Quick Connectivity Test
+`GET /api/esp32/ping` → `{ ok: true, ts: <ms> }`
+`GET /healthz` → service + Supabase status.
+
+### Minimal ESP32 HTTPS POST Snippet (Replace Edge Function approach)
+```cpp
+const char* BACKEND_HOST = "your-backend.example.com"; // Public backend host (no path)
+const int BACKEND_PORT = 443; // 443 if using HTTPS
+const char* SENSOR_PATH = "/api/esp32/sensor-data";
+
+bool postJson(const String &path, const String &payload) {
+   WiFiClientSecure client; client.setInsecure(); // or setCACert(...)
+   HTTPClient https; String url = String("https://") + BACKEND_HOST + path;
+   if (!https.begin(client, url)) return false;
+   https.addHeader("Content-Type", "application/json");
+   https.addHeader("x-device-id", DEVICE_ID);
+   https.addHeader("x-api-key", DEVICE_API_KEY);
+   // If HMAC enabled:
+   // String ts = String(time(nullptr));
+   // String sig = hmacSha256(String(DEVICE_ID) + payload + ts, DEVICE_HMAC_SECRET);
+   // https.addHeader("x-timestamp", ts);
+   // https.addHeader("x-signature", sig);
+   int code = https.POST(payload);
+   if (code > 0) Serial.printf("POST %s -> %d\n", path.c_str(), code);
+   else Serial.printf("POST fail %s\n", https.errorToString(code).c_str());
+   https.end(); return code == 200 || code == 201;
+}
+```
+
+## Migration Path (Planned Improvements)
+
+| Area | Current | Target |
+| ---- | ------- | ------ |
+| Secrets | Hardcoded fallback | Strict env only |
+| RLS | Allow all | Scoped policies |
+| Real-time | Custom WS | Optional Supabase realtime / SSE |
+| Motor logic | In `server.js` | Isolated service + tests |
+| Device auth | Table only | HMAC middleware enforced |
+
+## Troubleshooting Device HTTP "connection refused"
+
+1. Confirm backend process up (port 3001) and reachable from another LAN device.
+2. Use LAN IP in firmware (NOT localhost / 127.0.0.1 / firebase domain).
+3. Ensure firewall allows inbound port.
+4. Print full URL in firmware before POST; verify matches backend.
+5. If using HTTPS externally with a proxy, ensure proxy forwards to internal 3001.
+
+## Next Steps
+
+See SECURITY.md (to add) for refined RLS and auth guidelines. Open an issue to track each Tier 1 improvement from the audit section.
 
 # 🚰 Aqua Guard Sense - Water Tank Monitoring System
 
@@ -300,6 +424,7 @@ Enable debug logging in ESP32 firmware:
 - **Issues**: GitHub Issues
 - **Discussions**: GitHub Discussions
 - **Documentation**: ESP32_Integration_Guide.md
+   - Additional: docs/DEPLOYMENT.md, docs/HEALTHCHECK.md
 
 ---
 

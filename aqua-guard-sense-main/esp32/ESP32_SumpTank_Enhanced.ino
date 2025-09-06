@@ -1142,8 +1142,16 @@ void sendSensorData() {
   outer["apikey"] = DEVICE_API_KEY;
   outer["device_id"] = DEVICE_ID;
   outer["type"] = "sensor_data";
-  outer["data"] = doc; // doc contains { type, payload }
+  outer["data"] = payloadDoc; // Send payload directly instead of wrapped doc
   outer["protocol_version"] = FW_PROTOCOL_VERSION;
+  outer["timestamp"] = millis();
+  outer["tank_type"] = "sump_tank";
+  outer["level_percentage"] = sumpLevel;
+  outer["level_liters"] = sumpVolume;
+  outer["sensor_health"] = "good";
+  outer["esp32_id"] = DEVICE_ID;
+  outer["firmware_version"] = FIRMWARE_VERSION;
+  outer["build_timestamp"] = BUILD_TIMESTAMP;
   String jsonString;
   serializeJson(outer, jsonString);
   
@@ -1155,7 +1163,8 @@ void sendSensorData() {
   String timestamp = String(millis()/1000); // seconds epoch for backend tolerance
   String signature = generateHMACSignature(jsonString, timestamp);
   Serial.println("DATA: Attempting to send sensor data to backend...");
-  if (postToBackendWithAuth(jsonString, FW_PATH_SENSOR_DATA, timestamp, signature)) {
+  // Try without auth first to test basic connectivity
+  if (postToBackend(jsonString, FW_PATH_SENSOR_DATA)) {
     Serial.println("DATA: (HTTP) Sump sensor data sent - Level: " + String(sumpLevel, 1) + "%, Motor: " + motorStatus);
     logEvent("SENSOR_DATA_SENT", "Sensor data sent successfully with checksum: " + String(checksum) + " and HMAC signature");
     

@@ -1,59 +1,51 @@
 
-export interface SystemAlert {
-  id: string;
-  type: 'info' | 'warning' | 'error' | 'success';
-  message: string;
-  timestamp: Date;
-  resolved?: boolean;
-}
+import {
+  SystemAlert,
+  SystemAlertSchema,
+  TankReading,
+  TankReadingSchema,
+  MotorEvent,
+  MotorEventSchema,
+  SystemStatus,
+  SystemStatusSchema,
+  ConsumptionData,
+  ConsumptionDataSchema,
+  AIInsight,
+  AIInsightSchema,
+  UsagePattern,
+  UsagePatternSchema,
+  SystemData,
+  SystemDataSchema,
+  ESP32Status,
+  ESP32StatusSchema,
+  SystemStatusData,
+  SystemStatusDataSchema,
+} from '@/lib/schemas';
 
-export interface ESP32Status {
-  connected: boolean;
-  batteryLevel: number;
-  wifiStrength: number;
-  lastSeen: Date;
-}
+// Re-export all types from schemas for backward compatibility
+export type {
+  SystemAlert,
+  TankReading,
+  MotorEvent,
+  SystemStatus,
+  ConsumptionData,
+  AIInsight,
+  UsagePattern,
+  SystemData,
+  ESP32Status,
+  SystemStatusData,
+};
 
-export interface SystemStatusData {
-  wifiConnected: boolean;
-  batteryLevel: number;
-  temperature: number;
-  uptime: string;
-  esp32Status: {
-    topTank: 'online' | 'offline' | 'error';
-    sump: 'online' | 'offline' | 'error';
-  };
-}
-
-export interface ConsumptionData {
-  date: string;
-  consumption: number;
-  fills: number;
-  motorStarts: number;
-}
-
-export interface AIInsight {
-  id: string;
-  type: 'prediction' | 'anomaly' | 'recommendation' | 'maintenance';
-  title: string;
-  message: string;
-  confidence: number;
-  timestamp: Date;
-  priority: 'low' | 'medium' | 'high';
-}
-
-export interface UsagePattern {
-  hourlyPattern: number[];
-  weeklyPattern: number[];
-  seasonalTrend: 'increasing' | 'decreasing' | 'stable';
-  averageDailyUsage: number;
-  peakHours: number[];
-}
-
-export interface SystemData {
-  topTankLevel: number;
-  sumpLevel: number;
-  motorRunning: boolean;
-  alerts: SystemAlert[];
-  lastUpdate: Date;
-}
+// Re-export schemas for validation
+export {
+  SystemAlertSchema,
+  TankReadingSchema,
+  MotorEventSchema,
+  SystemStatusSchema,
+  ConsumptionDataSchema,
+  AIInsightSchema,
+  UsagePatternSchema,
+  SystemDataSchema,
+  ESP32StatusSchema,
+  SystemStatusDataSchema,
+};

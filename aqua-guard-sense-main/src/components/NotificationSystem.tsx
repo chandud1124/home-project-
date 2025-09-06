@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, X, AlertTriangle, Info, CheckCircle, Zap } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { useWebSocket } from "@/hooks/useWebSocket";
+import { apiService } from "@/services/api";
 
-interface Notification {
+// Local notification representation (extends base alert semantics)
+interface NotificationItem {
   id?: string;
   type: 'info' | 'warning' | 'error' | 'success' | 'alarm';
   title: string;
@@ -19,10 +20,22 @@ interface Notification {
   persistent?: boolean;
 }
 
+// Incoming SSE payloads we care about for notifications
+interface SystemAlertEventPayload {
+  type: 'info' | 'warning' | 'error' | 'success' | 'alarm';
+  message: string;
+  severity?: 'low' | 'medium' | 'high';
+  esp32_id?: string;
+  active?: boolean; // whether alert still active (mapped to persistent)
+}
+
+interface GenericMessagePayload { message?: string }
+
+type NotificationEventPayload = SystemAlertEventPayload | GenericMessagePayload;
+
 export const NotificationSystem = () => {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const { isConnected, lastMessage, sendMessage } = useWebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:8083');
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -47,13 +60,13 @@ export const NotificationSystem = () => {
     loadNotifications();
   }, [loadNotifications]);
 
-  const updateUnreadCount = (notifs: Notification[]) => {
+  const updateUnreadCount = (notifs: NotificationItem[]) => {
     const unread = notifs.filter(n => !n.read).length;
     setUnreadCount(unread);
   };
 
-  const addNotification = (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => {
-    const newNotification: Notification = {
+  const addNotification = (notification: Omit<NotificationItem, 'id' | 'timestamp' | 'read'>) => {
+    const newNotification: NotificationItem = {
       ...notification,
       id: Date.now().toString(),
       timestamp: new Date(),
@@ -72,7 +85,7 @@ export const NotificationSystem = () => {
     }
   };
 
-  const markAsRead = (id: string) => {
+  const markAsRead = (id: string | undefined) => {
     setNotifications(prev => prev.map(n => 
       n.id === id ? { ...n, read: true } : n
     ));
@@ -84,7 +97,7 @@ export const NotificationSystem = () => {
     setUnreadCount(0);
   };
 
-  const removeNotification = (id: string) => {
+  const removeNotification = (id: string | undefined) => {
     const notification = notifications.find(n => n.id === id);
     setNotifications(prev => prev.filter(n => n.id !== id));
     if (notification && !notification.read) {
@@ -92,7 +105,7 @@ export const NotificationSystem = () => {
     }
   };
 
-  const getIcon = (type: string) => {
+  const getIcon = (type: NotificationItem['type']) => {
     switch (type) {
       case 'error': return <AlertTriangle className="w-4 h-4 text-destructive" />;
       case 'warning': return <AlertTriangle className="w-4 h-4 text-warning" />;
@@ -100,6 +113,50 @@ export const NotificationSystem = () => {
       default: return <Info className="w-4 h-4 text-primary" />;
     }
   };
+
+  // Subscribe to realtime alerts from the SSE/api service
+  useEffect(() => {
+    // Handle system_alert messages coming from backend
+    const unsubscribeSystemAlert = apiService.onWebSocketMessage('system_alert', (data) => {
+      try {
+        if (!data || typeof data !== 'object') return;
+        const maybe = data as NotificationEventPayload;
+        const type: NotificationItem['type'] = 'type' in maybe && maybe.type ? maybe.type : 'info';
+        const message = 'message' in maybe && maybe.message ? maybe.message : 'System alert received';
+        addNotification({
+          type,
+          title: 'System Alert',
+          message,
+          severity: 'severity' in maybe ? maybe.severity : 'medium',
+          esp32_id: 'esp32_id' in maybe ? maybe.esp32_id : undefined,
+          persistent: 'active' in maybe ? maybe.active : undefined
+        });
+      } catch (e) {
+        console.warn('Failed to process system_alert for notifications:', e);
+      }
+    });
+
+    // Optional: generic warning/error/info events
+    const unsubscribeWarning = apiService.onWebSocketMessage('warning', (data) => {
+      const msg = (data && typeof data === 'object' && 'message' in data) ? (data as GenericMessagePayload).message : undefined;
+      addNotification({ type: 'warning', title: 'Warning', message: msg || 'Warning event' });
+    });
+    const unsubscribeError = apiService.onWebSocketMessage('error', (data) => {
+      const msg = (data && typeof data === 'object' && 'message' in data) ? (data as GenericMessagePayload).message : undefined;
+      addNotification({ type: 'error', title: 'Error', message: msg || 'Error event' });
+    });
+    const unsubscribeInfo = apiService.onWebSocketMessage('info', (data) => {
+      const msg = (data && typeof data === 'object' && 'message' in data) ? (data as GenericMessagePayload).message : undefined;
+      addNotification({ type: 'info', title: 'Info', message: msg || 'Information' });
+    });
+
+    return () => {
+      unsubscribeSystemAlert();
+      unsubscribeWarning();
+      unsubscribeError();
+      unsubscribeInfo();
+    };
+  }, []);
 
   return (
     <Dialog>

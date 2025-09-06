@@ -198,6 +198,52 @@ Both ESP32 devices communicate with the backend via:
 - **Data Format**: JSON
 - **Message Types**: heartbeat, sensor_data, motor_command, config_update
 
+### ✅ Updated (Current Implementation)
+The project backend now uses a Supabase Edge Function with **Server-Sent Events (SSE)** for browser realtime and **HTTPS POST** for device → cloud messages. Native WebSocket upgrades aren’t supported on Supabase Edge Functions, so the ESP32 firmware was migrated.
+
+ESP32 → Backend (Supabase Function):
+- Method: HTTPS POST
+- URL: `https://dwcouaacpqipvvsxiygo.supabase.co/functions/v1/websocket`
+- Headers:
+   - `Content-Type: application/json`
+   - `Authorization: Bearer <SUPABASE_ANON_KEY>`
+- Body Format:
+```
+{
+   "apikey": "<SUPABASE_ANON_KEY>",
+   "type": "sensor_data",            // or tank_reading, motor_status, system_alert, ping
+   "data": { ... }                    // payload content (existing structure preserved)
+}
+```
+
+Browser (Frontend) ← Backend:
+- Uses EventSource (SSE) to receive streamed messages.
+
+Why this change:
+- Supabase Edge Functions do not support WebSocket upgrades.
+- SSE satisfies browser realtime needs; devices only push & poll.
+- Command queue enables reliable motor control without persistent sockets.
+
+Implemented Command Polling:
+- Sump device polls every 10s for commands (motor_start / motor_stop).
+- Top device polls (15s) for future extensibility (currently acknowledges and ignores motor commands).
+- Acknowledgements prevent duplicate execution.
+
+Reliability Features:
+- Offline queue with exponential backoff (drops after max attempts).
+- All payloads include `firmware_version` & `build_timestamp`.
+- Root CA (ISRG Root X1) pinned: secure TLS instead of `setInsecure()`.
+
+Removed / Deprecated:
+- Legacy WebSocket logic (fully replaced by HTTPS + polling).
+
+Firmware Changes Summary:
+- Added HTTPS POST helpers (`postToSupabase`, `postToSupabaseTop`).
+- Replaced all `webSocket.sendTXT` usages.
+- Added queue structures & `processMessageQueue()` loop logic.
+- Added `pollCommands()` + `acknowledgeCommand()` functions.
+- Inserted root CA certificate & metadata macros.
+
 ## 🔍 Monitoring
 
 Monitor device status through:

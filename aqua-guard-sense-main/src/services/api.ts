@@ -1,11 +1,16 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { mockApiService } from './mockApi'
+import { TankReadingSchema, SystemAlertSchema, validateTankReading, validateSystemAlert } from '@/lib/schemas'
+import { createCommunicationService } from './communication'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'your-supabase-url'
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-supabase-anon-key'
 
 const supabase = createClient(supabaseUrl, supabaseKey)
+
+// Initialize enhanced communication service
+const communicationService = createCommunicationService()
 
 // Supabase backend configuration
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co'
@@ -1067,10 +1072,57 @@ class ApiService {
     if (USE_MOCK_API) {
       return mockApiService.resetManualOverride();
     }
-    
+
     this.sendWebSocketMessage({
       type: 'reset_manual'
     })
+  }
+
+  // Enhanced communication methods using the new service
+  async sendDeviceCommandEnhanced(deviceId: string, command: any) {
+    try {
+      await communicationService.sendDeviceCommand(deviceId, command)
+      console.log('📤 Device command sent via enhanced service:', command)
+    } catch (error) {
+      console.error('❌ Failed to send device command:', error)
+      throw error
+    }
+  }
+
+  getConnectionState() {
+    return communicationService.getConnectionState()
+  }
+
+  async makeValidatedApiCall<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    retries: number = 3
+  ): Promise<T> {
+    return communicationService.apiCall<T>(endpoint, options, retries)
+  }
+
+  // Alert acknowledgement
+  async acknowledgeAlert(alertId: string): Promise<void> {
+    if (USE_MOCK_API) {
+      return mockApiService.acknowledgeAlert(alertId);
+    }
+
+    try {
+      const { error } = await supabase
+        .from('alerts')
+        .update({
+          acknowledged: true,
+          acknowledged_at: new Date().toISOString()
+        })
+        .eq('id', alertId);
+
+      if (error) {
+        throw error;
+      }
+    } catch (error) {
+      console.error('Failed to acknowledge alert:', error);
+      throw error;
+    }
   }
 }
 

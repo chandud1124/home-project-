@@ -10,7 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
-import { apiService, type ConsumptionData } from "@/services/api";
+import { useOfflineSupport } from "@/hooks/useOfflineSupport";
+import { apiService } from "@/services/api";
+import { createUIMessage, validateBackendMessage } from "@/lib/protocols";
+import type { ConsumptionData } from "@/services/api";
 import { 
   Droplets, 
   Zap, 
@@ -102,6 +105,7 @@ const EnhancedIndex = () => {
   const [autoMode, setAutoMode] = useState(true);
   const [motorRunning, setMotorRunning] = useState(false);
   const { toast } = useToast();
+  const { isOnline } = useOfflineSupport();
 
   // Backend integration state
   const [topTank, setTopTank] = useState<TankReading | null>(null);
@@ -109,6 +113,10 @@ const EnhancedIndex = () => {
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatusType | null>(null);
   const [consumptionData, setConsumptionData] = useState<ConsumptionData[]>([]);
+
+  // Stale data tracking
+  const [lastTopTankUpdate, setLastTopTankUpdate] = useState<Date | null>(null);
+  const [lastSumpTankUpdate, setLastSumpTankUpdate] = useState<Date | null>(null);
 
   // Motor data state
   const [motorRuntime, setMotorRuntime] = useState<number>(0);
@@ -128,10 +136,9 @@ const EnhancedIndex = () => {
   const [isFetchingData, setIsFetchingData] = useState(false);
   const [esp32LastSeen, setEsp32LastSeen] = useState<Date | null>(null);
 
-  // Apply dark mode to document
-  useEffect(() => {
-    document.documentElement.classList.add('dark');
-  }, []);
+  // Connection state monitoring - temporarily disabled
+  // const [connectionState, setConnectionState] = useState<any>(null);
+  // const [connectionQuality, setConnectionQuality] = useState<'excellent' | 'good' | 'poor' | 'offline'>('offline');
 
   // Fetch dashboard data from API
   useEffect(() => {
@@ -323,6 +330,7 @@ const EnhancedIndex = () => {
                   timestamp: new Date().toISOString(),
                   signal_strength: tankData.signal_strength
                 });
+                setLastTopTankUpdate(new Date());
                 setEsp32LastSeen(new Date());
               } else if (tankData.tank_type === 'sump_tank') {
                 setSumpTank({
@@ -363,6 +371,7 @@ const EnhancedIndex = () => {
                   motor_running: tankData.motor_running,
                   manual_override: tankData.manual_override
                 });
+                setLastTopTankUpdate(new Date());
                 setEsp32LastSeen(new Date(tankData.timestamp));
               } else if (tankData.tank_type === 'sump_tank') {
                 setSumpTank({
@@ -376,6 +385,7 @@ const EnhancedIndex = () => {
                   manual_override: tankData.manual_override,
                   auto_mode_enabled: tankData.auto_mode_enabled
                 });
+                setLastSumpTankUpdate(new Date());
                 // Sync auto mode state with ESP32
                 if (tankData.auto_mode_enabled !== undefined) {
                   setAutoMode(tankData.auto_mode_enabled);
@@ -706,6 +716,18 @@ const EnhancedIndex = () => {
           </div>
         </div>
       </header>
+
+      {/* Offline Banner */}
+      {!isOnline && (
+        <div className="relative z-10 bg-destructive/10 border-b border-destructive/20">
+          <div className="container mx-auto px-4 py-2">
+            <div className="flex items-center justify-center gap-2 text-destructive text-sm">
+              <AlertTriangle className="h-4 w-4" />
+              <span>You're currently offline. Some features may be limited.</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="relative z-10 container mx-auto px-4 py-8 space-y-8">

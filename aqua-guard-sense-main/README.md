@@ -15,11 +15,12 @@ A comprehensive IoT solution for monitoring and controlling water tank systems w
 
 ## 🏗️ Architecture
 
-### Backend (Supabase)
-- **Database**: PostgreSQL with real-time subscriptions
-- **Edge Functions**: Serverless API endpoints
-- **WebSocket**: Real-time communication with ESP32 devices
-- **Authentication**: Row Level Security (RLS)
+### Backend (Supabase Edge Function)
+- **Realtime (UI)**: Server-Sent Events (SSE) stream
+- **Device Ingest**: HTTPS POST JSON wrapper
+- **Command Queue**: In-memory per-device (enqueue / poll / acknowledge)
+- **Security**: API key header + TLS root CA pinning (ESP32)
+- **Future**: Optional persistence for commands
 
 ### Frontend (Firebase)
 - **Hosting**: Fast, secure web hosting
@@ -58,8 +59,10 @@ npm install
 ```env
 VITE_SUPABASE_URL=your-supabase-project-url
 VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
-VITE_WEBSOCKET_URL=wss://your-project.supabase.co/functions/v1/websocket
+VITE_EDGE_FUNCTION_URL=https://your-project.supabase.co/functions/v1/websocket
 ```
+
+`VITE_WEBSOCKET_URL` is deprecated (SSE used instead).
 
 4. Deploy Supabase functions:
 
@@ -145,33 +148,15 @@ GET /functions/v1/api/alerts
 GET /functions/v1/api/system-status
 ```
 
-### WebSocket Events
+### Command & Telemetry Flow
+1. Device → Cloud: HTTPS POST `{ apikey, type, data, firmware_version, build_timestamp }`
+2. Cloud → Browser: Broadcast via SSE
+3. UI → Command: POST `{ type: "enqueue_command", target_device_id, command_type, payload }`
+4. Device Poll: `GET /functions/v1/websocket?poll=1&device_id=ID`
+5. Device Ack: POST `{ type: "acknowledge_command", device_id, command_id, status }`
+6. Status rebroadcast (optional)
 
-```typescript
-// ESP32 Registration
-{
-  type: 'esp32_register',
-  esp32_id: 'ESP32_TOP_001',
-  device_type: 'top_tank'
-}
-
-// Sensor Data
-{
-  type: 'sensor_data',
-  payload: {
-    tank_type: 'top_tank',
-    level_percentage: 75,
-    level_liters: 750
-  }
-}
-
-// Motor Control
-{
-  type: 'motor_control',
-  esp32_id: 'ESP32_SUMP_001',
-  state: true // true = start, false = stop
-}
-```
+Current command types: `motor_start`, `motor_stop`.
 
 ## 🗄️ Database Schema
 
@@ -225,7 +210,7 @@ npm run build
 1. Install ESP32 board support in Arduino IDE
 2. Install required libraries:
    - WiFi
-   - WebSocketsClient
+   - (removed) WebSocketsClient (SSE now used)
    - ArduinoJson
 
 3. Update firmware configuration
@@ -262,25 +247,25 @@ supabase functions deploy
 ### Environment Variables
 
 ```env
-# Supabase
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
-VITE_WEBSOCKET_URL=wss://your-project.supabase.co/functions/v1/websocket
-
-# Optional: Local development
-VITE_BACKEND_URL=http://localhost:3001
+VITE_EDGE_FUNCTION_URL=https://your-project.supabase.co/functions/v1/websocket
 ```
+`VITE_WEBSOCKET_URL` deprecated.
 
 ### ESP32 Configuration
-
-Update these values in your ESP32 firmware:
 
 ```cpp
 const char* WIFI_SSID = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char* SERVER_IP = "YOUR_LOCAL_IP_OR_SUPABASE_URL";
-const int WEBSOCKET_PORT = 8083; // or Supabase port
+const char* SUPABASE_HOST = "your-project.supabase.co"; // host only
+// HTTPS endpoint: https://<SUPABASE_HOST>/functions/v1/websocket
 ```
+Firmware includes:
+- Exponential backoff offline queue
+- Root CA pinning (ISRG Root X1)
+- Command polling + acknowledgements
+- Metadata: `firmware_version`, `build_timestamp`
 
 ## 🤝 Contributing
 
@@ -323,7 +308,7 @@ Enable debug logging in ESP32 firmware:
    npm run dev
    ```
    - API Server: http://localhost:3001
-   - WebSocket Server: ws://localhost:8083
+   - SSE Stream: Edge function EventSource
 
 ### Frontend Setup
 1. Navigate to frontend folder:
@@ -349,12 +334,12 @@ Enable debug logging in ESP32 firmware:
 ## Features
 
 - **Real-time Tank Monitoring**: Monitor water levels in main tank and sump with ultrasonic sensors
-- **ESP32 Integration**: Direct WebSocket communication with ESP32 devices for real-time data
+- **ESP32 Integration**: Secure HTTPS POST + polling command queue
 - **Motor Control**: Remote start/stop with safety interlocks and current monitoring
 - **System Alerts**: Real-time notifications for system events and safety conditions
 - **Historical Analytics**: Daily/monthly consumption tracking with MongoDB
 - **Mobile Responsive**: Optimized for mobile devices with dark theme
-- **WebSocket Communication**: Live data updates without page refresh
+- **SSE Communication**: Live data updates without page refresh
 - **Cloud Database**: MongoDB for scalable data storage
 - **Auto Motor Control**: Intelligent motor management based on tank levels
 - **Battery Monitoring**: ESP32 battery level and WiFi signal strength tracking
@@ -367,11 +352,10 @@ Enable debug logging in ESP32 firmware:
 - `GET /api/alerts` - System alerts
 - `GET /api/consumption` - Usage analytics
 
-### WebSocket API (Port 8083)
-- Real-time ESP32 communication
-- Live data broadcasting to frontend
-- Motor command transmission
-- Device registration and heartbeat
+### Command Queue API (Edge Function)
+- Enqueue: `POST /functions/v1/websocket` `{ type: "enqueue_command", target_device_id, command_type, payload }`
+- Poll: `GET /functions/v1/websocket?poll=1&device_id=DEVICE_ID`
+- Acknowledge: `POST /functions/v1/websocket` `{ type: "acknowledge_command", device_id, command_id, status }`
 
 ## Technology Stack
 
@@ -399,18 +383,8 @@ Enable debug logging in ESP32 firmware:
 
 ## Testing
 
-### WebSocket Communication Test
-Test the ESP32 WebSocket communication:
-```bash
-cd backend
-node test_websocket.js
-```
-
-This will test:
-- Device registration
-- Sensor data transmission
-- Motor status updates
-- Heartbeat communication
+### Realtime Test
+Use browser devtools Network tab to verify SSE stream and inspect command enqueue responses.
 
 ### ESP32 Integration
 1. Follow the `esp32/ESP32_Integration_Guide.md` for hardware setup

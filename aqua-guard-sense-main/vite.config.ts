@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8081,
@@ -20,6 +20,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  test: mode === 'test' ? {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+  } : undefined,
   // Optimize build settings
   build: {
     // Improve performance by disabling source maps in production
@@ -33,9 +38,6 @@ export default defineConfig({
             'react', 
             'react-dom', 
             'react-router-dom'
-          ],
-          ui: [
-            '@/components/ui'
           ]
         }
       }
@@ -43,4 +45,4 @@ export default defineConfig({
     // Optimize chunk size
     chunkSizeWarningLimit: 1000
   }
-});
+}));

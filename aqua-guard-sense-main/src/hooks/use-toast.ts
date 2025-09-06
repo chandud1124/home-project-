@@ -1,19 +1,33 @@
 import * as React from "react"
 
-import type {
-  ToastActionElement,
-  ToastProps,
-} from "@/components/ui/toast"
+// Toast positioning options (extend if needed)
+type ToastPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+// Visual / semantic variants for styling
+export type ToastVariant = 'default' | 'destructive' | 'success' | 'warning' | 'info';
+
+// Action element type (e.g., a button)
+type ToastActionElement = React.ReactElement<{ onClick?: () => void; className?: string }>;
+
+// Core toast props accepted by the system (excluding internal id, open handling)
+interface ToastProps {
+  title?: React.ReactNode;
+  description?: React.ReactNode;
+  action?: ToastActionElement;
+  duration?: number; // custom auto-dismiss
+  position?: ToastPosition;
+  variant?: ToastVariant;
+  // Transition/control flags
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  // Arbitrary metadata for advanced scenarios
+  meta?: Record<string, unknown>;
+}
 
 const TOAST_LIMIT = 1
 const TOAST_REMOVE_DELAY = 1000000
 
-type ToasterToast = ToastProps & {
-  id: string
-  title?: React.ReactNode
-  description?: React.ReactNode
-  action?: ToastActionElement
-}
+type ToasterToast = ToastProps & { id: string }
 
 const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
@@ -29,25 +43,13 @@ function genId() {
   return count.toString()
 }
 
-type ActionType = typeof actionTypes
+type ActionType = typeof actionTypes;
 
 type Action =
-  | {
-      type: ActionType["ADD_TOAST"]
-      toast: ToasterToast
-    }
-  | {
-      type: ActionType["UPDATE_TOAST"]
-      toast: Partial<ToasterToast>
-    }
-  | {
-      type: ActionType["DISMISS_TOAST"]
-      toastId?: ToasterToast["id"]
-    }
-  | {
-      type: ActionType["REMOVE_TOAST"]
-      toastId?: ToasterToast["id"]
-    }
+  | { type: ActionType["ADD_TOAST"]; toast: ToasterToast }
+  | { type: ActionType["UPDATE_TOAST"]; toast: Partial<ToasterToast> & { id: string } }
+  | { type: ActionType["DISMISS_TOAST"]; toastId?: ToasterToast["id"] }
+  | { type: ActionType["REMOVE_TOAST"]; toastId?: ToasterToast["id"] };
 
 interface State {
   toasts: ToasterToast[]
@@ -184,8 +186,11 @@ function useToast() {
   return {
     ...state,
     toast,
-    dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
+  dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
   }
 }
 
 export { useToast, toast }
+
+// Re-export internal types that might be useful to consumers
+export type { Toast, ToasterToast, ToastProps, ToastActionElement };

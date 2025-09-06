@@ -80,7 +80,7 @@ class AIService {
         title: 'Unusual Water Consumption',
         message: `Water usage has increased by ${Math.round((recentAvg - previousAvg) / previousAvg * 100)}% compared to last week. Check for possible leaks.`,
         confidence: 0.8,
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         priority: 'high'
       });
     }
@@ -94,7 +94,7 @@ class AIService {
         title: 'High Motor Activity',
         message: `Motor started ${motorStarts} times this week. Consider checking for frequent on/off cycling.`,
         confidence: 0.9,
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         priority: 'medium'
       });
     }
@@ -120,7 +120,7 @@ class AIService {
         title: 'Optimal Fill Time',
         message: 'Current hour has low water usage. Good time to fill the tank.',
         confidence: 0.85,
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         priority: 'low'
       });
     }
@@ -142,7 +142,7 @@ class AIService {
       title: 'Power Outage Preparedness',
       message: `With current tank levels, system can operate for approximately ${Math.round(hoursWithoutPump)} hours without power. ${hoursWithoutPump < 12 ? 'Consider filling tanks before planned outages.' : 'Good reserve capacity.'}`,
       confidence: 0.75,
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
       priority: hoursWithoutPump < 12 ? 'high' : 'low'
     };
   }

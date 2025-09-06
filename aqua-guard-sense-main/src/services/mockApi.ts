@@ -305,5 +305,15 @@ export const mockApiService = {
         }
       }, 1000);
     });
+  },
+
+  // Alert acknowledgement
+  acknowledgeAlert: async (alertId: string): Promise<void> => {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        console.log(`Mock: Alert ${alertId} acknowledged`);
+        resolve();
+      }, 500);
+    });
   }
 };

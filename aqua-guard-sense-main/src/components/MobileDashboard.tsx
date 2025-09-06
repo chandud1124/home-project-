@@ -11,8 +11,10 @@ import { AIInsightsPanel } from "./AIInsightsPanel";
 import { SystemStatus } from "./SystemStatus";
 import { ConsumptionChart } from "./ConsumptionChart";
 import { useSwipeGestures } from "@/hooks/useSwipeGestures";
+import { SystemAlertSchema, ConsumptionDataSchema, AIInsightSchema } from '@/lib/schemas';
+import type { SystemAlert, ConsumptionData, AIInsight } from '@/types/system';
 
-type MobileDashboardProps = {
+interface MobileDashboardProps {
   // Tank data
   totalWaterLevel: number;
   waterLevelChange: number;
@@ -29,8 +31,8 @@ type MobileDashboardProps = {
   // System data
   efficiency: number;
   dailyUsage: number;
-  alerts: any[];
-  aiInsights: any[];
+  alerts: AlertItem[];
+  aiInsights: AIInsight[];
   
   // ESP32 status
   esp32TopStatus: {
@@ -49,8 +51,8 @@ type MobileDashboardProps = {
   };
   
   // Consumption data
-  dailyConsumptionData: any[];
-  monthlyConsumptionData: any[];
+  dailyConsumptionData: ConsumptionPoint[];
+  monthlyConsumptionData: ConsumptionPoint[];
   
   // Handlers
   onToggleAutoMode: (enabled: boolean) => void;
@@ -60,6 +62,11 @@ type MobileDashboardProps = {
   onAIQuerySubmit: (query: string) => void;
   queryResponse: string;
 };
+
+// Domain type aliases
+type AlertItem = SystemAlert;
+type AIInsightItem = AIInsight;
+type ConsumptionPoint = ConsumptionData;
 
 const MobileDashboard: React.FC<MobileDashboardProps> = ({
   totalWaterLevel,

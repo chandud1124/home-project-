@@ -33,9 +33,39 @@
 ### Analytics
 - `GET /api/consumption?period=daily|monthly` - Get consumption data
 
-## WebSocket Connection
+## Real-time Transport (Updated)
 
-Real-time updates are available at `ws://localhost:8083`
+Legacy WebSocket server replaced by Supabase Edge Function using:
+- **SSE (Server-Sent Events)** for browser realtime downstream
+- **HTTPS POST** for telemetry & command enqueue
+- **Polling Endpoint** for device command retrieval
+
+Command Queue Endpoints (Edge Function `websocket`):
+1. Enqueue command:
+```
+POST /functions/v1/websocket
+{ "type": "enqueue_command", "target_device_id": "SUMP_TANK_1", "command_type": "motor_start", "payload": {"requested_by":"ui"} }
+```
+2. Poll commands:
+```
+GET /functions/v1/websocket?poll=1&device_id=SUMP_TANK_1
+```
+3. Acknowledge command:
+```
+POST /functions/v1/websocket
+{ "type": "acknowledge_command", "device_id": "SUMP_TANK_1", "command_id": "<uuid>", "status": "success" }
+```
+
+Telemetry POST Wrapper:
+```json
+{
+   "apikey": "<anon key>",
+   "type": "sensor_data|motor_status|system_alert|ping",
+   "data": {"...": "..."},
+   "firmware_version": "2.1.0",
+   "build_timestamp": "2025-09-06T00:00:00Z"
+}
+```
 
 ## Database
 

@@ -1252,7 +1252,7 @@ const Index = () => {
                 <span className="hidden sm:inline">System Online</span>
                 <span className="sm:hidden">Online</span>
               </Badge>
-              <Badge 
+        <Badge 
                 variant="outline" 
                 className={`px-2 sm:px-3 py-1 text-xs sm:text-sm ${
                   wsConnected 
@@ -1264,10 +1264,10 @@ const Index = () => {
                   wsConnected ? 'bg-success' : 'bg-warning'
                 }`} />
                 <span className="hidden sm:inline">
-                  WebSocket: {wsConnected ? 'Connected' : 'Disconnected'}
+          Realtime: {wsConnected ? 'Connected' : 'Disconnected'}
                 </span>
                 <span className="sm:hidden">
-                  WS: {wsConnected ? 'On' : 'Off'}
+          RT: {wsConnected ? 'On' : 'Off'}
                 </span>
               </Badge>
               <Badge 

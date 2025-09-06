@@ -6,360 +6,399 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Cache-Control': 'no-cache',
+  'Connection': 'keep-alive',
+  'Content-Type': 'text/event-stream',
 }
 
-// Store active WebSocket connections
+// Initialize Supabase client
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY')!
+const supabase = createClient(supabaseUrl, supabaseKey)
+
+// Store active SSE connections
 const connections = new Map()
+
+// Removed in-memory command queues; now using Supabase table 'device_commands'
+let commandCounter = 0
+
+async function enqueueCommand(deviceId: string, type: string, payload: any) {
+  const cmd = {
+    id: `${Date.now()}-${commandCounter++}`,
+    device_id: deviceId,
+    type,
+    payload,
+    created_at: new Date().toISOString(),
+    retry_count: 0,
+    ttl: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour TTL
+    acknowledged: false
+  }
+  const { error } = await supabase.from('device_commands').insert(cmd)
+  if (error) {
+    console.error('Error enqueuing command:', error)
+    throw error
+  }
+  return cmd
+}
+
+async function pollCommands(deviceId: string, max = 10) {
+  const { data, error } = await supabase
+    .from('device_commands')
+    .select('*')
+    .eq('device_id', deviceId)
+    .eq('acknowledged', false)
+    .gt('ttl', new Date().toISOString())
+    .order('created_at', { ascending: true })
+    .limit(max)
+  if (error) {
+    console.error('Error polling commands:', error)
+    return []
+  }
+  return data || []
+}
+
+async function acknowledgeCommand(deviceId: string, commandId: string) {
+  const { error } = await supabase
+    .from('device_commands')
+    .update({ acknowledged: true })
+    .eq('device_id', deviceId)
+    .eq('id', commandId)
+  if (error) {
+    console.error('Error acknowledging command:', error)
+    return false
+  }
+  return true
+}
 
 serve(async (req) => {
   console.log('Request received:', req.method, req.url)
-  console.log('Headers:', Object.fromEntries(req.headers.entries()))
-
+  
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
-  // Check for WebSocket upgrade - try multiple ways
-  const upgrade = req.headers.get('upgrade')
-  const connection = req.headers.get('connection')
-  const secWebSocketKey = req.headers.get('sec-websocket-key')
-
-  console.log('Upgrade header:', upgrade)
-  console.log('Connection header:', connection)
-  console.log('Sec-WebSocket-Key header:', secWebSocketKey ? 'present' : 'missing')
-
-  // Check if this is a WebSocket upgrade request
-  const isWebSocketUpgrade = (upgrade && upgrade.toLowerCase() === 'websocket') ||
-                            (connection && connection.toLowerCase().includes('upgrade')) ||
-                            secWebSocketKey
-
-  if (isWebSocketUpgrade) {
-    console.log('WebSocket upgrade detected')
+  // Check for Server-Sent Events request
+  const accept = req.headers.get('accept')
+  if (accept && accept.includes('text/event-stream')) {
+    console.log('SSE connection requested')
+    
+    // Create SSE response
+    const stream = new ReadableStream({
+      start(controller) {
+        // Send initial connection message
+        const data = JSON.stringify({
+          type: 'connected',
+          message: 'SSE connection established',
+          timestamp: new Date().toISOString()
+        })
+        controller.enqueue(`data: ${data}\n\n`)
+        
+        // Store the controller for later use
+        const connectionId = Date.now().toString()
+        connections.set(connectionId, controller)
+        
+        // Send a ping every 30 seconds to keep connection alive
+        const pingInterval = setInterval(() => {
+          try {
+            const pingData = JSON.stringify({
+              type: 'ping',
+              timestamp: new Date().toISOString()
+            })
+            controller.enqueue(`data: ${pingData}\n\n`)
+          } catch (error) {
+            console.error('Error sending ping:', error)
+            clearInterval(pingInterval)
+            connections.delete(connectionId)
+          }
+        }, 30000)
+        
+        // Clean up on connection close
+        req.signal.addEventListener('abort', () => {
+          clearInterval(pingInterval)
+          connections.delete(connectionId)
+          controller.close()
+        })
+      },
+      cancel() {
+        console.log('SSE connection cancelled')
+      }
+    })
+    
+    return new Response(stream, {
+      headers: corsHeaders
+    })
+  }
+  
+  // Metrics endpoint (GET with query param: metrics=1)
+  if (req.method === 'GET' && url.searchParams.get('metrics') === '1') {
     try {
-      const { socket, response } = Deno.upgradeWebSocket(req)
-      console.log('WebSocket upgraded successfully')
+      // Get command queue metrics
+      const { data: commands, error: cmdError } = await supabase
+        .from('device_commands')
+        .select('device_id, created_at, acknowledged')
+        .gt('ttl', new Date().toISOString())
+      
+      if (cmdError) throw cmdError
+      
+      const queueDepth = commands?.length || 0
+      const pendingCommands = commands?.filter(c => !c.acknowledged).length || 0
+      
+      // Calculate enqueue rate (commands per hour in last 24 hours)
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const recentCommands = commands?.filter(c => c.created_at > oneDayAgo).length || 0
+      const enqueueRate = recentCommands / 24 // per hour
+      
+      // Get heartbeat data for device connectivity
+      const { data: heartbeats, error: hbError } = await supabase
+        .from('device_heartbeats')
+        .select('device_id, timestamp, heartbeat_type')
+        .gt('timestamp', new Date(Date.now() - 5 * 60 * 1000).toISOString()) // Last 5 minutes
+        .order('timestamp', { ascending: false })
+      
+      if (hbError) console.error('Error fetching heartbeats:', hbError)
+      
+      // Calculate device connectivity status
+      const deviceConnectivity = {}
+      const heartbeatGroups = heartbeats?.reduce((acc, hb) => {
+        if (!acc[hb.device_id]) acc[hb.device_id] = []
+        acc[hb.device_id].push(hb)
+        return acc
+      }, {} as Record<string, typeof heartbeats>)
+      
+      for (const [deviceId, hbList] of Object.entries(heartbeatGroups || {})) {
+        const latestHeartbeat = hbList[0]
+        const timeSinceLastHeartbeat = Date.now() - new Date(latestHeartbeat.timestamp).getTime()
+        const isOnline = timeSinceLastHeartbeat < 2 * 60 * 1000 // 2 minutes threshold
+        
+        deviceConnectivity[deviceId] = {
+          status: isOnline ? 'online' : 'offline',
+          last_heartbeat: latestHeartbeat.timestamp,
+          time_since_heartbeat_ms: timeSinceLastHeartbeat,
+          heartbeat_type: latestHeartbeat.heartbeat_type
+        }
+      }
+      
+      // Device latency (simplified - time since last command)
+      const deviceLatencies = {}
+      const deviceGroups = commands?.reduce((acc, cmd) => {
+        if (!acc[cmd.device_id]) acc[cmd.device_id] = []
+        acc[cmd.device_id].push(cmd)
+        return acc
+      }, {} as Record<string, typeof commands>)
+      
+      for (const [deviceId, cmds] of Object.entries(deviceGroups || {})) {
+        const latest = cmds.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
+        deviceLatencies[deviceId] = Date.now() - new Date(latest.created_at).getTime()
+      }
+      
+      return new Response(JSON.stringify({
+        queue_depth: queueDepth,
+        pending_commands: pendingCommands,
+        enqueue_rate_per_hour: enqueueRate,
+        device_latencies_ms: deviceLatencies,
+        device_connectivity: deviceConnectivity,
+        timestamp: new Date().toISOString()
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    } catch (error) {
+      console.error('Error fetching metrics:', error)
+      return new Response(JSON.stringify({ error: 'Failed to fetch metrics' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+  }
+  
+  // Command polling endpoint (GET with query param: device_id)
+  if (req.method === 'GET' && url.searchParams.get('poll') === '1') {
+    const deviceId = url.searchParams.get('device_id')
+    if (!deviceId) {
+      return new Response(JSON.stringify({ error: 'device_id required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+    try {
+      const cmds = await pollCommands(deviceId)
+      return new Response(JSON.stringify({ commands: cmds, count: cmds.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    } catch (error) {
+      console.error('Error polling commands:', error)
+      return new Response(JSON.stringify({ error: 'Failed to poll commands' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+  }
 
-      // Handle WebSocket connection
-      socket.onopen = () => {
-        console.log('WebSocket connection opened')
+  // Handle regular HTTP POST requests (broadcast / enqueue / acknowledge)
+  if (req.method === 'POST') {
+    try {
+      const body = await req.json()
+      console.log('Received message:', body.type)
+      
+      // Check authentication - support both global and per-device auth
+      const messageApiKey = body.apikey || body.api_key
+      const deviceId = body.device_id || body.deviceId
+      const hmacSignature = body.hmac_signature || body.signature
+      const timestamp = body.timestamp
+
+      let isAuthenticated = false
+      let authenticatedDeviceId = null
+
+      // Try global API key authentication (for backward compatibility)
+      const expectedGlobalApiKey = Deno.env.get('SUPABASE_ANON_KEY')
+      if (messageApiKey && messageApiKey === expectedGlobalApiKey) {
+        isAuthenticated = true
       }
 
-      socket.onmessage = async (event) => {
+      // Try per-device authentication with HMAC
+      if (!isAuthenticated && deviceId && hmacSignature && timestamp) {
         try {
-          const data = JSON.parse(event.data)
-          console.log('Received WebSocket message:', data.type)
+          // Verify device exists and is active
+          const { data: device, error: deviceError } = await supabase
+            .from('devices')
+            .select('api_key, hmac_secret, is_active')
+            .eq('device_id', deviceId)
+            .eq('is_active', true)
+            .single()
 
-          // Initialize Supabase client with service role key for WebSocket operations
-          const supabaseClient = createClient(
-            Deno.env.get('SUPABASE_URL') ?? '',
-            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-          )
+          if (!deviceError && device) {
+            // Verify API key matches
+            if (messageApiKey && messageApiKey === device.api_key) {
+              // Verify HMAC signature
+              const payload = JSON.stringify(body.data || body)
+              const message = deviceId + payload + timestamp
 
-          switch (data.type) {
-            case 'ping':
-              // Respond to ping with pong
-              socket.send(JSON.stringify({ type: 'pong', data: { timestamp: Date.now(), server_time: new Date().toISOString() } }))
-              break
-            case 'esp32_register':
-              await handleESP32Registration(supabaseClient, socket, data)
-              break
-            case 'sensor_data':
-              await handleSensorData(supabaseClient, socket, data)
-              break
-            case 'motor_status':
-              await handleMotorStatus(supabaseClient, socket, data)
-              break
-            case 'motor_control':
-              await handleMotorControl(supabaseClient, socket, data)
-              break
-            case 'auto_mode_control':
-              await handleAutoModeControl(supabaseClient, socket, data)
-              break
-            case 'reset_manual':
-              await handleResetManual(supabaseClient, socket, data)
-              break
-            default:
-              console.log('Unknown message type:', data.type)
+              const cryptoKey = await crypto.subtle.importKey(
+                'raw',
+                new TextEncoder().encode(device.hmac_secret),
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+              )
+
+              const signature = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(message))
+              const expectedSignature = Array.from(new Uint8Array(signature))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('')
+
+              if (expectedSignature === hmacSignature.toLowerCase()) {
+                isAuthenticated = true
+                authenticatedDeviceId = deviceId
+
+                // Update last seen timestamp
+                await supabase
+                  .from('devices')
+                  .update({ last_seen: new Date().toISOString() })
+                  .eq('device_id', deviceId)
+              }
+            }
           }
         } catch (error) {
-          console.error('Error processing WebSocket message:', error)
-          socket.send(JSON.stringify({
-            type: 'error',
-            message: 'Invalid message format',
+          console.error('HMAC verification error:', error)
+        }
+      }
+
+      if (!isAuthenticated) {
+        return new Response(JSON.stringify({
+          error: 'Authentication failed'
+        }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      // Special command: enqueue_command -> expects target_device_id & command_type & payload
+      if (body.type === 'enqueue_command') {
+        const deviceId = body.target_device_id || body.device_id
+        const commandType = body.command_type || body.command || 'generic'
+        if (!deviceId) {
+          return new Response(JSON.stringify({ error: 'target_device_id required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+        try {
+          const cmd = await enqueueCommand(deviceId, commandType, body.payload || body.data || {})
+          return new Response(JSON.stringify({ success: true, enqueued: cmd }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } catch (error) {
+          console.error('Error enqueuing command:', error)
+          return new Response(JSON.stringify({ error: 'Failed to enqueue command' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+      }
+
+      // Special command: acknowledge_alert -> mark alert as acknowledged
+      if (body.type === 'acknowledge_alert') {
+        const alertId = body.alert_id
+        if (!alertId) {
+          return new Response(JSON.stringify({ error: 'alert_id required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+        try {
+          const { error } = await supabase
+            .from('alerts')
+            .update({ acknowledged: true, acknowledged_at: new Date().toISOString() })
+            .eq('id', alertId)
+          if (error) throw error
+          return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } catch (error) {
+          console.error('Error acknowledging alert:', error)
+          return new Response(JSON.stringify({ error: 'Failed to acknowledge alert' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+      }
+
+      // Special command: heartbeat -> record device heartbeat
+      if (body.type === 'heartbeat') {
+        const deviceId = body.device_id || body.deviceId
+        const heartbeatType = body.heartbeat_type || body.heartbeatType || 'pong'
+        if (!deviceId) {
+          return new Response(JSON.stringify({ error: 'device_id required for heartbeat' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+        try {
+          const { error } = await supabase
+            .from('device_heartbeats')
+            .insert({
+              device_id: deviceId,
+              heartbeat_type: heartbeatType,
+              timestamp: new Date().toISOString(),
+              metadata: body.metadata || {}
+            })
+          if (error) throw error
+          
+          // Also broadcast heartbeat to SSE connections for real-time monitoring
+          const heartbeatData = JSON.stringify({
+            type: 'device_heartbeat',
+            data: {
+              device_id: deviceId,
+              heartbeat_type: heartbeatType,
+              timestamp: new Date().toISOString()
+            },
             timestamp: new Date().toISOString()
-          }))
-        }
-      }
-
-      socket.onclose = () => {
-        console.log('WebSocket connection closed')
-        // Remove from connections map
-        for (const [id, conn] of connections.entries()) {
-          if (conn.socket === socket) {
-            connections.delete(id)
-            break
+          })
+          for (const controller of connections.values()) {
+            try { controller.enqueue(`data: ${heartbeatData}\n\n`) } catch (error) { console.error('Error broadcasting heartbeat:', error) }
           }
+          
+          return new Response(JSON.stringify({ success: true, message: 'Heartbeat recorded' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } catch (error) {
+          console.error('Error recording heartbeat:', error)
+          return new Response(JSON.stringify({ error: 'Failed to record heartbeat' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
         }
       }
 
-      socket.onerror = (error) => {
-        console.error('WebSocket error:', error)
+      // Default: broadcast message to all SSE connections
+      const messageData = JSON.stringify({
+        type: body.type,
+        data: body.data || body,
+        timestamp: new Date().toISOString()
+      })
+      for (const controller of connections.values()) {
+        try { controller.enqueue(`data: ${messageData}\n\n`) } catch (error) { console.error('Error broadcasting message:', error) }
       }
-
-      return response
+      return new Response(JSON.stringify({ success: true, message: 'Message broadcasted' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     } catch (error) {
-      console.error('WebSocket upgrade failed:', error)
-      return new Response(JSON.stringify({ error: 'WebSocket upgrade failed' }), {
-        status: 500,
+      console.error('Error processing request:', error)
+      return new Response(JSON.stringify({
+        error: 'Invalid request'
+      }), {
+        status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
   }
-
-  console.log('Not a WebSocket request, returning error')
-  return new Response(JSON.stringify({ error: 'WebSocket upgrade required' }), {
-    status: 400,
+  
+  return new Response(JSON.stringify({ 
+    message: 'WebSocket/SSE endpoint - use POST for messages or GET with Accept: text/event-stream for SSE', 
+    timestamp: new Date().toISOString() 
+  }), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
   })
 })
-
-async function handleESP32Registration(supabaseClient, socket, data) {
-  const deviceInfo = {
-    id: data.esp32_id,
-    device_type: data.device_type || 'unknown',
-    firmware_version: data.firmware_version || 'Unknown',
-    status: 'online',
-    last_seen: new Date().toISOString()
-  }
-
-  // Store device info in database
-  const { error } = await supabaseClient
-    .from('esp32_devices')
-    .upsert(deviceInfo, { onConflict: 'id' })
-
-  if (error) {
-    console.error('Error storing device info:', error)
-    return
-  }
-
-  // Store connection
-  connections.set(data.esp32_id, {
-    socket,
-    deviceInfo,
-    connectedAt: new Date()
-  })
-
-  console.log(`ESP32 ${data.esp32_id} registered`)
-
-  // Send registration acknowledgment
-  socket.send(JSON.stringify({
-    type: 'registration_ack',
-    esp32_id: data.esp32_id,
-    timestamp: new Date().toISOString()
-  }))
-
-  // Broadcast system status update
-  broadcastSystemStatus(supabaseClient)
-}
-
-async function handleSensorData(supabaseClient, socket, data) {
-  const payload = data.payload
-
-  const sensorData = {
-    tank_type: payload.tank_type,
-    level_percentage: payload.level_percentage,
-    level_liters: payload.level_liters,
-    sensor_health: payload.sensor_health || 'good',
-    esp32_id: payload.esp32_id,
-    battery_voltage: payload.battery_voltage,
-    signal_strength: payload.signal_strength,
-    float_switch: payload.float_switch,
-    motor_running: payload.motor_running,
-    manual_override: payload.manual_override,
-    auto_mode_enabled: payload.auto_mode_enabled,
-    timestamp: new Date().toISOString()
-  }
-
-  // Store sensor data
-  const { data: result, error } = await supabaseClient
-    .from('tank_readings')
-    .insert(sensorData)
-    .select()
-
-  if (error) {
-    console.error('Error storing sensor data:', error)
-    return
-  }
-
-  console.log(`Sensor data stored for ${payload.tank_type}: ${payload.level_percentage}%`)
-
-  // Broadcast to all connected clients
-  broadcastToAll({
-    type: 'sensor_data',
-    data: result[0]
-  })
-
-  // Send motor command if needed
-  const motorCommand = getMotorCommand(payload.level_percentage, payload.tank_type)
-  if (motorCommand.command !== 'maintain') {
-    socket.send(JSON.stringify({
-      type: 'motor_command',
-      command: motorCommand
-    }))
-  }
-}
-
-async function handleMotorStatus(supabaseClient, socket, data) {
-  const payload = data.payload
-
-  const motorData = {
-    event_type: payload.motor_running ? 'status_running' : 'status_stopped',
-    power_detected: payload.power_detected,
-    current_draw: payload.current_draw,
-    runtime_seconds: payload.runtime_seconds,
-    timestamp: new Date().toISOString()
-  }
-
-  // Store motor status
-  const { error } = await supabaseClient
-    .from('motor_events')
-    .insert(motorData)
-
-  if (error) {
-    console.error('Error storing motor status:', error)
-    return
-  }
-
-  // Broadcast motor status
-  broadcastToAll({
-    type: 'motor_status',
-    data: {
-      isRunning: payload.motor_running,
-      powerDetected: payload.power_detected,
-      currentDraw: payload.current_draw,
-      runtime: payload.runtime_seconds,
-      timestamp: new Date().toISOString()
-    }
-  })
-}
-
-async function handleMotorControl(supabaseClient, socket, data) {
-  const motorState = data.state
-  const esp32Id = data.esp32_id
-
-  // Find the target ESP32 connection
-  const connection = connections.get(esp32Id)
-  if (!connection) {
-    socket.send(JSON.stringify({
-      type: 'motor_control_error',
-      error: 'esp32_not_connected',
-      message: 'Target ESP32 device is not connected'
-    }))
-    return
-  }
-
-  // Forward motor control command to ESP32
-  connection.socket.send(JSON.stringify({
-    type: 'motor_control',
-    state: motorState,
-    timestamp: new Date().toISOString()
-  }))
-
-  console.log(`Motor control forwarded to ESP32 ${esp32Id}: ${motorState ? 'START' : 'STOP'}`)
-}
-
-async function handleAutoModeControl(supabaseClient, socket, data) {
-  const enabled = data.enabled
-  const esp32Id = data.esp32_id
-
-  // Find the target ESP32 connection
-  const connection = connections.get(esp32Id)
-  if (!connection) {
-    socket.send(JSON.stringify({
-      type: 'auto_mode_error',
-      error: 'esp32_not_connected',
-      message: 'Target ESP32 device is not connected'
-    }))
-    return
-  }
-
-  // Forward auto mode control command to ESP32
-  connection.socket.send(JSON.stringify({
-    type: 'auto_mode_control',
-    enabled: enabled,
-    timestamp: new Date().toISOString()
-  }))
-
-  console.log(`Auto mode control forwarded to ESP32 ${esp32Id}: ${enabled ? 'ENABLED' : 'DISABLED'}`)
-}
-
-async function handleResetManual(supabaseClient, socket, data) {
-  const esp32Id = data.esp32_id
-
-  // Find the target ESP32 connection
-  const connection = connections.get(esp32Id)
-  if (!connection) {
-    socket.send(JSON.stringify({
-      type: 'reset_manual_error',
-      error: 'esp32_not_connected',
-      message: 'Target ESP32 device is not connected'
-    }))
-    return
-  }
-
-  // Forward reset manual command to ESP32
-  connection.socket.send(JSON.stringify({
-    type: 'reset_manual',
-    timestamp: new Date().toISOString()
-  }))
-
-  console.log(`Manual override reset forwarded to ESP32 ${esp32Id}`)
-}
-
-function getMotorCommand(topTankLevel, sumpLevel) {
-  // Auto mode logic
-  if (topTankLevel < 20 && sumpLevel > 30) {
-    return { command: 'start', reason: 'auto_fill_low_tank' }
-  }
-  if (topTankLevel > 90 || sumpLevel < 20) {
-    return { command: 'stop', reason: 'safety_cutoff' }
-  }
-  return { command: 'maintain', reason: 'normal_operation' }
-}
-
-async function broadcastSystemStatus(supabaseClient) {
-  // Get current system status
-  const { data: devices } = await supabaseClient
-    .from('esp32_devices')
-    .select('device_type, status')
-    .eq('status', 'online')
-
-  const topOnline = devices.some(d => d.device_type === 'top_tank')
-  const sumpOnline = devices.some(d => d.device_type === 'sump')
-
-  const systemStatus = {
-    type: 'system_status',
-    data: {
-      wifi_connected: true,
-      battery_level: 85,
-      temperature: 25,
-      esp32_top_status: topOnline ? 'online' : 'offline',
-      esp32_sump_status: sumpOnline ? 'online' : 'offline',
-      wifi_strength: -50,
-      timestamp: new Date().toISOString()
-    }
-  }
-
-  broadcastToAll(systemStatus)
-}
-
-function broadcastToAll(message) {
-  for (const connection of connections.values()) {
-    try {
-      connection.socket.send(JSON.stringify(message))
-    } catch (error) {
-      console.error('Error broadcasting to connection:', error)
-    }
-  }
-}

@@ -62,6 +62,10 @@ const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 const char* DEVICE_TYPE = "top_tank_monitor";
 const char* DEVICE_ID = "ESP32_TOP_002";  // Updated to unique ID
 
+// Firmware Metadata
+#define FIRMWARE_VERSION "2.1.0"
+#define BUILD_TIMESTAMP __DATE__ " " __TIME__
+
 // Sump Tank ESP32 Configuration (for motor commands)
 const char* SUMP_ESP32_IP = "192.168.0.184";  // Updated with actual Sump ESP32 IP address
 const int SUMP_ESP32_PORT = 80;
@@ -89,8 +93,8 @@ const float MIN_SENSOR_DISTANCE_CM = 20.0;  // Minimum reliable detection distan
 const float MAX_SENSOR_DISTANCE_CM = 450.0; // Maximum detection distance
 
 // ========== LIBRARIES ==========
+//#include <WebSocketsClient.h> // Deprecated - moving to HTTPS POST only
 #include <WiFi.h>
-#include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <esp_task_wdt.h>  // ESP32 Watchdog Timer
@@ -120,7 +124,84 @@ const unsigned long BASE_RECONNECT_DELAY = 5000; // 5 seconds base delay
 const unsigned long MAX_RECONNECT_DELAY = 300000; // 5 minutes max delay
 
 // ========== GLOBAL VARIABLES ==========
-WebSocketsClient webSocket;
+// WebSocketsClient webSocket; // Disabled
+// ===== HTTPS POST SUPPORT (NEW) =====
+const char* SUPABASE_HOST = "dwcouaacpqipvvsxiygo.supabase.co";
+const int SUPABASE_HTTPS_PORT = 443;
+
+bool postToSupabaseTop(const String &jsonPayload) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("HTTP: WiFi not connected (top)");
+    return false;
+  }
+  WiFiClientSecure client;
+  static const char ISRG_ROOT_X1[] PROGMEM = R"CERT(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgISA5VKZU2CrP8Gr3HdWu3UwLrhMA0GCSqGSIb3DQEBCwUA
+MEoxCzAJBgNVBAYTAlVTMRMwEQYDVQQKEwpMZXQncyBFbmNyeXB0MSMwIQYDVQQD
+ExpMZXQncyBFbmNyeXB0IEF1dGhvcml0eSBSNCBDQTAeFw0yNDAzMDYxMzM3MjFa
+Fw0yNDA1MDUxMzM3MjBaMCExHzAdBgNVBAMTFmR3Y291YWFjcHFpcHZ2c3hpeWdv
+LnN1cGFiYXNlLmNvMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAy46v
+6z6zO4tY50gX0pHlBeizYpqGdzijE0wTRWcJ31nXZT9JExPMcPfajn1IuZUohzRh
+VjHusGKq1RR5wE9MAnp4UaFChWA8A74J/grzC46U47vKe0Ohcaw5g+iTwbmJuKjE
+7/wn+8MSdEQL3cTlPgxsF9REYFbW1oSvyVIOTYQ6LpsTCtvlZi/4Posr6ccpqONw
+6qku/9k4EG+3/r6FJq4n5NDiYzIlIfQSXLc0838vtjqa6eo4qpcgW/lR3IpLkH4J
+b+wrvGBFWlpji+/zw1seLzlKdIuExadHkPUAOqwKjn3x0QsvWhop0yW33eJDf1Rp
+JAmYoZOmL9GMaTTjstqKMsIpMuHkH13MSbeEn0CbnpH5uVABakgAyXFSEU/lJKJ/
+48O1Ql1H62xoZ1PZL9oC5XY9SE+clQtMV0jzuWWBsHv6qKaH03BTjVX7sWQ5KOaS
+YhFdJh7PG4LwMeImOE3qtmuMq3ECh/YGV/EsMOUawTqk0CDr/78GWvIQeX6R/msx
+7qssTQcL7vhX64HxmFaFjz+t+rG72agt8XRYHWEYt9FtYCOamVD+DhZ6V1Jaj8Nm
++G9VWvHZlWgX9XpE4fECWyNeRpr2PD8fGwGy+tzZQ+XNZ8lqRfiCCJF34JciFCKR
+9qhBeH0+kat+0TsjgWf1dBSFp0Kn42GNsKXjEcCAwEAAaOCAbIwggGuMA4GA1Ud
+DwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0T
+AQH/BAIwADAdBgNVHQ4EFgQUavZ8gwtc62nA/TkfFREe5g2/S1MwHwYDVR0jBBgw
+FoAUWTBTb6LSaP5GoS9DXHqd6nXIB6MwVQYIKwYBBQUHAQEESTBHMCEGCCsGAQUF
+BMAbsBlhbWlwYyUyRUxFVEMlMkZsZXRzZW5jcnlwdCUyRmxlZ2l0cyUyRnJvb3RH
+Y1Jvb3QkMB0GA1UdEQQWMBSCFmR3Y291YWFjcHFpcHZ2c3hpeWdvLnN1cGFiYXNl
+LmNvMEwGA1UdIARFMEMwCAYGZ4EMAQIBMDcGCysGAQQBgt8TAQEBMCgwJgYIKwYB
+BQUHAgEWGmh0dHA6Ly9jcHMubGV0c2VuY3J5cHQub3JnMIIBBgYKKwYBBAHWeQIE
+AgSB9wSB9AFuAHYApLkJkLQYWBSHuxOizGdwCjw1mAT5G9+443fNDsgN3BAAAAGP
+M3Iv1gAABAMARzBFAiEAxRdHzLwJgWqOF8JpAR2YKgU2fnRdT8Kyo54Djj7a3IsC
+IGpEU0bhnFvFQ14WFa8QoBCLuefn1/FhsWUnb10V9O0EAHYAb1N2rDHw0e126nb
+FIYEQ3ubWpBzhTAgRVr8vxw/mZso0gAAAGPM3IwRgAABAMARzBFAiBKRpea/9Se
+AjSV0fpiXw1hlSYV0cs9b9btIlS49CziwIhAIM6tGfvRa8ZI2F2gKRwsEVE+d2J
+N5mo9oTCF7vwwtbvMA0GCSqGSIb3DQEBCwUAA4ICAQC/29F6Zdp8e1MBkS+7waR
+dKhWJKgFyPepbGLX+QadevRt7gRZg534PDoRZdbqyBEh9JUp1VsVvvNXrFrJmCj7
+TTQzstplm+Iz7M49yyoDv29n2gQUrgUXGND699zm1uHF2pmbAIsIyZphbsPhnQJ
+z824JPY6x35edbT7l1EqNvU8IftdbU8Qbw6MPKynk0m//JoQMy0RBMxmrOGEnkiR
+F1UDLAmgMOFPZJRe7T4oShvOpj+IbF0dDgogkiMBS5oeVyKXzyPZMS+mYGgrRmWm
+wEpUuEksX+hSyriiKcdlwUhu1IJR17dtKkpJWepxclkZHMde1oAHMj/9EAYVX2vE
+Z870VZJXBKcbVtbQ6Fa09JsDUfcWsDvs9P5pqb0nGf7uTgK+hbDczWRkZH4yXDNi
+NoJi2qrg2HwnmCvLPnBqeI+Ioe9MU2nS7YnxcoJYQNRUKYHkOJ1IKALJiQZ8vyV
+uEWIXQmsm97qzUblfNPcG9wmk7hWEehZ4PDbMGF28PpjCC4kYNoLXRsPZ2jHYq/b
+HA2z8un0G5+UZdPsfu4qAFYcix4v09M9Bb6vVQwBd5JCyF6/HlHqUZrogWH6MHM
+O65J6mpAasCH3HQ6MTuk8FyNbJhdM1itqoLZS2YknH6K5qg6k2xg//gG1hEVfuX+
+GXJz8IFEAhh/1JKXNxgrSSdhA==
+-----END CERTIFICATE-----
+)CERT";
+  client.setCACert(ISRG_ROOT_X1);
+  HTTPClient https;
+  String url = String(SUPABASE_URL) + WEBSOCKET_PATH;
+  if (!https.begin(client, url)) {
+    Serial.println("HTTP: begin() failed (top)");
+    return false;
+  }
+  https.addHeader("Content-Type", "application/json");
+  https.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+  int status = https.POST(jsonPayload);
+  if (status <= 0) {
+    Serial.print("HTTP: POST error (top): ");
+    Serial.println(https.errorToString(status));
+    https.end();
+    return false;
+  }
+  Serial.print("HTTP: POST status (top) "); Serial.println(status);
+  if (status != 200) {
+    Serial.println(https.getString());
+  }
+  https.end();
+  return status == 200;
+}
 unsigned long lastHeartbeat = 0;
 unsigned long lastSensorRead = 0;
 bool wifiConnected = false;
@@ -153,6 +234,96 @@ unsigned long lastHeartbeatResponse = 0;
 int heartbeatMissedCount = 0;
 const unsigned long HEARTBEAT_TIMEOUT = 120000; // 2 minutes timeout for heartbeat response
 bool backendResponsive = true;
+
+// Command polling (for potential future top-tank targeted commands)
+unsigned long topLastCommandPoll = 0;
+const unsigned long TOP_COMMAND_POLL_INTERVAL = 15000; // 15s
+void topPollCommands();
+bool topAcknowledgeCommand(const String &commandId);
+
+// ========== OFFLINE MESSAGE QUEUE (NEW) ==========
+struct QueuedMessage {
+  String payload;
+  uint8_t attempts;
+  unsigned long nextAttempt;
+};
+
+const int TOP_QUEUE_CAPACITY = 20;
+const uint8_t TOP_QUEUE_MAX_ATTEMPTS = 8;
+const unsigned long TOP_QUEUE_BASE_DELAY = 5000; // 5s
+const unsigned long TOP_QUEUE_MAX_DELAY = 300000; // 5m
+QueuedMessage topQueue[TOP_QUEUE_CAPACITY];
+int topQueueCount = 0;
+
+unsigned long topComputeBackoff(uint8_t attempts) {
+  unsigned long factor = 1UL << attempts; // 2^attempts
+  unsigned long d = TOP_QUEUE_BASE_DELAY * factor;
+  if (d > TOP_QUEUE_MAX_DELAY) d = TOP_QUEUE_MAX_DELAY;
+  return d;
+}
+
+bool topEnqueue(const String &payload) {
+  if (topQueueCount >= TOP_QUEUE_CAPACITY) {
+    // Drop oldest (lowest nextAttempt)
+    int dropIndex = -1;
+    unsigned long earliest = ULONG_MAX;
+    for (int i=0;i<TOP_QUEUE_CAPACITY;i++) {
+      if (topQueue[i].payload.length()>0 && topQueue[i].nextAttempt < earliest) {
+        earliest = topQueue[i].nextAttempt;
+        dropIndex = i;
+      }
+    }
+    if (dropIndex >=0) {
+      topQueue[dropIndex].payload = "";
+      topQueueCount--;
+    }
+    Serial.println("QUEUE: Top queue full - dropped oldest message");
+  }
+  for (int i=0;i<TOP_QUEUE_CAPACITY;i++) {
+    if (topQueue[i].payload.length()==0) {
+      topQueue[i].payload = payload;
+      topQueue[i].attempts = 0;
+      topQueue[i].nextAttempt = millis();
+      topQueueCount++;
+      Serial.print("QUEUE: Top message enqueued. Size=");
+      Serial.println(topQueueCount);
+      return true;
+    }
+  }
+  Serial.println("QUEUE: Failed to enqueue top message");
+  return false;
+}
+
+void processTopQueue() {
+  if (topQueueCount == 0) return;
+  unsigned long now = millis();
+  for (int i=0;i<TOP_QUEUE_CAPACITY;i++) {
+    if (topQueue[i].payload.length()==0) continue;
+    if (topQueue[i].attempts >= TOP_QUEUE_MAX_ATTEMPTS) {
+      Serial.println("QUEUE: Dropping top message (max attempts)");
+      topQueue[i].payload = "";
+      topQueueCount--;
+      continue;
+    }
+    if (now < topQueue[i].nextAttempt) continue;
+    Serial.print("QUEUE: Top resend attempt ");
+    Serial.println(topQueue[i].attempts + 1);
+    bool ok = postToSupabaseTop(topQueue[i].payload);
+    if (ok) {
+      Serial.println("QUEUE: Top resend success");
+      topQueue[i].payload = "";
+      topQueueCount--;
+    } else {
+      topQueue[i].attempts++;
+      unsigned long b = topComputeBackoff(topQueue[i].attempts);
+      topQueue[i].nextAttempt = now + b;
+      Serial.print("QUEUE: Top resend failed - backoff ms=");
+      Serial.println(b);
+    }
+  }
+}
+
+int getTopQueueSize() { return topQueueCount; }
 
 // ========== FUNCTIONS ==========
 
@@ -534,6 +705,8 @@ void sendSensorData() {
   payloadDoc["level_liters"] = waterVolume;
   payloadDoc["sensor_health"] = "good";
   payloadDoc["esp32_id"] = DEVICE_ID;
+  payloadDoc["firmware_version"] = FIRMWARE_VERSION;
+  payloadDoc["build_timestamp"] = BUILD_TIMESTAMP;
   payloadDoc["battery_voltage"] = 3.3;
   payloadDoc["signal_strength"] = WiFi.RSSI();
   payloadDoc["motor_command_sent"] = motorRunning;
@@ -543,16 +716,24 @@ void sendSensorData() {
   doc["type"] = "sensor_data";
   doc["payload"] = payloadDoc;
 
+  // Wrap for HTTPS POST
+  StaticJsonDocument<640> outer;
+  outer["apikey"] = SUPABASE_ANON_KEY;
+  outer["type"] = "sensor_data";
+  outer["data"] = doc; // doc has type + payload
   String jsonString;
-  serializeJson(doc, jsonString);
+  serializeJson(outer, jsonString);
 
   Serial.println("📦 JSON PAYLOAD:");
   Serial.println(jsonString);
   Serial.println("📤 SENDING TO BACKEND...");
 
-  webSocket.sendTXT(jsonString);
-
-  Serial.println("✅ SUCCESS: Sensor data sent to backend");
+  if (postToSupabaseTop(jsonString)) {
+    Serial.println("✅ SUCCESS: (HTTP) Sensor data sent to backend");
+  } else {
+    Serial.println("❌ ERROR: (HTTP) Failed to send sensor data - queued");
+    topEnqueue(jsonString);
+  }
   Serial.println("==========================================");
 }
 
@@ -567,19 +748,79 @@ void sendPing() {
   Serial.print("⏰ TIMESTAMP: ");
   Serial.println(millis());
 
-  StaticJsonDocument<64> doc;
-  doc["type"] = "ping";
+  StaticJsonDocument<64> inner;
+  inner["type"] = "ping";
+  inner["firmware_version"] = FIRMWARE_VERSION;
+  inner["build_timestamp"] = BUILD_TIMESTAMP;
+  StaticJsonDocument<160> outer;
+  outer["apikey"] = SUPABASE_ANON_KEY;
+  outer["type"] = "ping";
+  outer["data"] = inner;
   String jsonString;
-  serializeJson(doc, jsonString);
+  serializeJson(outer, jsonString);
 
   Serial.println("📦 PING PAYLOAD:");
   Serial.println(jsonString);
   Serial.println("📤 SENDING PING...");
 
-  webSocket.sendTXT(jsonString);
-
-  Serial.println("✅ SUCCESS: Ping sent to backend");
+  if (postToSupabaseTop(jsonString)) {
+    Serial.println("✅ SUCCESS: (HTTP) Ping sent to backend");
+  } else {
+    Serial.println("❌ ERROR: (HTTP) Ping failed - queued");
+    topEnqueue(jsonString);
+  }
   Serial.println("==========================================");
+}
+
+// ===== COMMAND POLLING (TOP) =====
+void topPollCommands() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (millis() - topLastCommandPoll < TOP_COMMAND_POLL_INTERVAL) return;
+  topLastCommandPoll = millis();
+  WiFiClientSecure client;
+  extern const char ISRG_ROOT_X1[] PROGMEM;
+  client.setCACert(ISRG_ROOT_X1);
+  HTTPClient https;
+  String url = String(SUPABASE_URL) + WEBSOCKET_PATH + "?poll=1&device_id=" + DEVICE_ID;
+  if (!https.begin(client, url)) { Serial.println("CMD(TOP): begin failed"); return; }
+  https.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+  int status = https.GET();
+  if (status != 200) { Serial.print("CMD(TOP): poll status="); Serial.println(status); https.end(); return; }
+  String body = https.getString(); https.end();
+  StaticJsonDocument<1024> doc; DeserializationError err = deserializeJson(doc, body);
+  if (err) { Serial.print("CMD(TOP): parse error "); Serial.println(err.c_str()); return; }
+  JsonArray cmds = doc["commands"].as<JsonArray>();
+  if (!cmds || cmds.size()==0) { Serial.println("CMD(TOP): no commands"); return; }
+  Serial.print("CMD(TOP): received "); Serial.print(cmds.size()); Serial.println(" command(s)");
+  for (JsonObject c : cmds) {
+    String cid = c["id"].as<String>();
+    String ctype = c["type"].as.String();
+    bool handled = false;
+    if (ctype == "motor_start") {
+      // Could proxy to sump, but typically commands originate here; optionally ignore
+      Serial.println("CMD(TOP): motor_start received (ignored - origin device)");
+      handled = true;
+    } else if (ctype == "motor_stop") {
+      Serial.println("CMD(TOP): motor_stop received (ignored - origin device)");
+      handled = true;
+    } else {
+      Serial.println("CMD(TOP): unknown type");
+    }
+    if (handled) topAcknowledgeCommand(cid);
+  }
+}
+
+bool topAcknowledgeCommand(const String &commandId) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  WiFiClientSecure client; extern const char ISRG_ROOT_X1[] PROGMEM; client.setCACert(ISRG_ROOT_X1);
+  HTTPClient https; String url = String(SUPABASE_URL) + WEBSOCKET_PATH;
+  if (!https.begin(client, url)) return false;
+  https.addHeader("Content-Type", "application/json");
+  https.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+  StaticJsonDocument<256> doc; doc["apikey"] = SUPABASE_ANON_KEY; doc["type"] = "acknowledge_command"; doc["device_id"] = DEVICE_ID; doc["command_id"] = commandId; String json; serializeJson(doc, json);
+  int status = https.POST(json); https.end();
+  if (status == 200) { Serial.print("CMD(TOP): ack "); Serial.println(commandId); return true; }
+  Serial.print("CMD(TOP): ack failed status="); Serial.println(status); return false;
 }
 
 // Get connection state as string for debugging
@@ -625,11 +866,12 @@ void attemptWebSocketReconnection() {
   connectionAttempts++;
   lastConnectionAttempt = now;
 
-  webSocket.begin(SUPABASE_URL, 443, WEBSOCKET_PATH);  // Supabase WebSocket
+  // webSocket.begin(SUPABASE_URL, 443, WEBSOCKET_PATH);  // (Deprecated) Supabase WebSocket disabled
   // webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY); // Uncomment if needed
 }
 
 // WebSocket event handler (IMPROVED)
+/* (Deprecated) WebSocket event handler removed after migration to HTTPS POST
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED:
@@ -664,7 +906,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         doc["type"] = "esp32_register";
         doc["esp32_id"] = DEVICE_ID;
         doc["device_type"] = DEVICE_TYPE;
-        doc["firmware_version"] = "2.0.0";
+  // doc["firmware_version"] = FIRMWARE_VERSION; // (legacy WS path deprecated)
 
         String jsonString;
         serializeJson(doc, jsonString);
@@ -723,6 +965,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       break;
   }
 }
+*/
 
 // Connect to WiFi with comprehensive error handling and retry logic
 void connectToWiFi() {
@@ -922,14 +1165,17 @@ void setup() {
     Serial.println("ERROR: WiFi connection failed - check credentials and network");
   }
 
+  // Poll for any commands targeting top tank (future extensibility)
+  topPollCommands();
+
   // Initialize WebSocket
   if (wifiConnected) {
     Serial.println("REFRESH: Initializing WebSocket connection to SUPABASE...");
     Serial.print("ANTENNA: Connecting to: ");
     Serial.print(SUPABASE_URL);
     Serial.println(":443/functions/v1/websocket");
-    webSocket.begin(SUPABASE_URL, 443, WEBSOCKET_PATH);  // Supabase WebSocket
-    webSocket.onEvent(webSocketEvent);
+  // webSocket.begin(SUPABASE_URL, 443, WEBSOCKET_PATH);  // Disabled
+  // webSocket.onEvent(webSocketEvent);
     webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY); // Supabase authorization
     connectionState = CONNECTING;
     Serial.println("SUCCESS: WebSocket initialization complete");
@@ -1008,22 +1254,10 @@ void loop() {
     }
   }
 
-  webSocket.loop();
+  // webSocket.loop(); // Removed - using HTTPS POST only
 
   // Verify WebSocket connection status after loop
-  if (webSocket.isConnected() != websocketConnected) {
-    websocketConnected = webSocket.isConnected();
-    if (websocketConnected) {
-      Serial.println("SUCCESS: WebSocket connection established!");
-      connectionState = CONNECTED;
-      connectionEstablishedTime = millis();
-      websocketErrorCount = 0;
-    } else {
-      Serial.println("ERROR: WebSocket connection lost!");
-      connectionState = DISCONNECTED;
-      backendResponsive = false;
-    }
-  }
+  // (Removed) WebSocket status tracking
 
   // Read sensors periodically
   if (millis() - lastSensorRead > 3000) {
@@ -1057,7 +1291,7 @@ void loop() {
   }
 
   // Send heartbeat and data with improved monitoring (NO AUTO RESTART)
-  if (websocketConnected) {
+  if (wifiConnected) {
     static unsigned long lastPing = 0;
     if (millis() - lastPing > 30000) {  // Ping every 30 seconds
       sendPing();
@@ -1101,11 +1335,7 @@ void loop() {
   }
 
   // IMPROVED: Smart reconnection logic
-  if (!websocketConnected && WiFi.status() == WL_CONNECTED) {
-    if (connectionState == DISCONNECTED || connectionState == RECONNECTING) {
-      attemptWebSocketReconnection();
-    }
-  }
+  // (Removed) WebSocket reconnection logic
 
   // Reconnect WiFi if disconnected
   if (WiFi.status() != WL_CONNECTED) {
@@ -1138,14 +1368,7 @@ void loop() {
     Serial.println("===============================\n");
     lastStatusLog = millis();
   }  // Reconnect WebSocket if disconnected
-  if (!websocketConnected && WiFi.status() == WL_CONNECTED) {
-    static unsigned long lastReconnectAttempt = 0;
-    if (millis() - lastReconnectAttempt > 5000) {
-      Serial.println("REFRESH: Attempting WebSocket reconnection...");
-      webSocket.begin(SUPABASE_URL, 443, WEBSOCKET_PATH);  // Supabase WebSocket
-      lastReconnectAttempt = millis();
-    }
-  }
+  // (Removed) periodic WebSocket reconnection attempt
 
   // Reconnect WiFi if disconnected
   if (WiFi.status() != WL_CONNECTED) {
@@ -1167,7 +1390,7 @@ void loop() {
       Serial.println(wifiConnected ? "YES" : "NO");
       Serial.print("WEB: IP Address: ");
       Serial.println(WiFi.localIP());
-      Serial.print("WEBSOCKET: WebSocket Connected: ");
+  // Serial.print("WEBSOCKET: WebSocket Connected: ");
       Serial.println(websocketConnected ? "YES" : "NO");
       Serial.print("ANTENNA: Backend Responsive: ");
       Serial.println(backendResponsive ? "YES" : "NO");
@@ -1180,16 +1403,6 @@ void loop() {
       Serial.print("WATCHDOG: Watchdog Status: ");
       Serial.println(esp_task_wdt_status(NULL) == ESP_OK ? "ACTIVE" : "INACTIVE");
       Serial.println("===========================\n");
-    } else if (command == "reconnect" || command == "RECONNECT") {
-      Serial.println("\nREFRESH: Manual WebSocket reconnection triggered...");
-      websocketConnected = false;
-      connectionState = DISCONNECTED;
-      connectionAttempts = 0;
-      lastConnectionAttempt = 0;
-      webSocket.disconnect();
-      delay(1000);
-      attemptWebSocketReconnection();
-      Serial.println("SUCCESS: Reconnection attempt initiated\n");
     } else if (command == "wifi" || command == "WIFI") {
       Serial.println("\nREFRESH: Manual WiFi reconnection triggered...");
       wifiConnected = false;
@@ -1202,10 +1415,12 @@ void loop() {
     } else if (command == "help" || command == "HELP") {
       Serial.println("\n=== AVAILABLE COMMANDS ===");
       Serial.println("status    - Show current connection and sensor status");
-      Serial.println("reconnect - Manually trigger WebSocket reconnection");
       Serial.println("wifi      - Manually trigger WiFi reconnection");
       Serial.println("help      - Show this help message");
       Serial.println("=========================\n");
     }
   }
+
+  // Process queued messages for resend
+  processTopQueue();
 }

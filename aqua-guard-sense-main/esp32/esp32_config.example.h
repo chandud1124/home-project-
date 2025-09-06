@@ -1,27 +1,21 @@
-// ESP32 Configuration File
-// Replace the values below with your specific configuration
-// This file replaces the need for secrets.h
+// Example ESP32 Configuration
+// Copy this to esp32_config.h and update with your actual values
 
 #ifndef ESP32_CONFIG_H
 #define ESP32_CONFIG_H
 
 // ========== DEVICE CONFIGURATION ==========
-// Choose your device type by uncommenting one line:
-// #define DEVICE_TYPE "SUMP_TANK"
-// #define DEVICE_TYPE "TOP_TANK"
-
-// Device identification
 #define DEVICE_ID "ESP32_SUMP_002"  // Change this for each ESP32
 #define DEVICE_NAME "Sump Tank Controller"
 
 // ========== API CONFIGURATION ==========
-// Get these values from your frontend when adding the ESP32 device
-#define DEVICE_API_KEY "YOUR_API_KEY_FROM_FRONTEND"  // Replace with actual key from frontend
-#define DEVICE_HMAC_SECRET "YOUR_HMAC_SECRET_FROM_FRONTEND"  // Replace with actual secret from frontend
+// Get these from your frontend when adding the ESP32 device
+#define DEVICE_API_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
+#define DEVICE_HMAC_SECRET "c2858fe0513830bfe988a46e8162d9ef6fec933758156a901a41012afde8bb5b7fa1cee9e677cbe72aa0e84a4b4c72aabf8f33ad1d989ba4b69ca9e1b1e1e0c2"
 
 // ========== WIFI CONFIGURATION ==========
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "I am Not A Witch I am Your Wifi"
+#define WIFI_PASSWORD "Whoareu@0000"
 
 // ========== BACKEND CONFIGURATION ==========
 #define BACKEND_HOST "dwcouaacpqipvvsxiygo.supabase.co"

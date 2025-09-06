@@ -49,20 +49,11 @@
 
 // ========== CONFIGURATION SECTION ==========
 
-// WiFi Configuration - UPDATED FOR YOUR NETWORK
-const char* WIFI_SSID = WIFI_SSID;  // From esp32_config.h
-const char* WIFI_PASSWORD = WIFI_PASSWORD;  // From esp32_config.h
-
-// Backend Configuration (Supabase Edge Functions) - UPDATED FOR PRODUCTION
-const char* BACKEND_HOST = BACKEND_HOST;   // From esp32_config.h
-const uint16_t BACKEND_PORT = BACKEND_PORT;            // From esp32_config.h
-const bool BACKEND_USE_TLS = BACKEND_USE_TLS;            // From esp32_config.h
+// All configuration now comes from esp32_config.h
 
 // Device Configuration
 const char* DEVICE_TYPE = "top_tank_monitor";
-const char* DEVICE_ID = DEVICE_ID;  // From esp32_config.h
-const char* DEVICE_API_KEY = DEVICE_API_KEY;  // From esp32_config.h
-const char* DEVICE_HMAC_SECRET = DEVICE_HMAC_SECRET;  // From esp32_config.h
+// Use defines directly from esp32_config.h (no variable redeclaration needed)
 
 // Firmware Metadata
 #define FIRMWARE_VERSION "2.1.0"

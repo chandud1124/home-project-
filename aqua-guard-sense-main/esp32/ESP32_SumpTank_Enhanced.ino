@@ -1753,8 +1753,8 @@ void loop() {
   // Process offline queue (try resends)
   processMessageQueue();
 
-  // Poll backend for pending commands
-  pollCommands();
+  // Command polling removed - using HTTPS POST instead of WebSocket
+  // pollCommands();
 }
 
 // Update LED indicators based on current states

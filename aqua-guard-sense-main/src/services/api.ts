@@ -12,9 +12,9 @@ const supabase = createClient(supabaseUrl, supabaseKey)
 // Initialize enhanced communication service
 const communicationService = createCommunicationService()
 
-// Supabase backend configuration
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co'
-const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || 'wss://dwcouaacpqipvvsxiygo.supabase.co/functions/v1/websocket'
+// Backend configuration (prefer explicit backend vars; no production host fallback to Supabase URL)
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'ws://localhost:8083'
 
 // Flag to use mock API when backend is not available
 const USE_MOCK_API = false // Using real ESP32 data

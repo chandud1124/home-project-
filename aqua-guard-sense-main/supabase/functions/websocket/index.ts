@@ -5,8 +5,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-requested-with, accept, accept-encoding, accept-language, cache-control, connection, host, pragma, referer, sec-fetch-dest, sec-fetch-mode, sec-fetch-site, sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
+  'Access-Control-Max-Age': '86400',
   'Cache-Control': 'no-cache',
   'Connection': 'keep-alive',
   'Content-Type': 'text/event-stream',
@@ -73,6 +74,14 @@ async function acknowledgeCommand(deviceId: string, commandId: string) {
 
 serve(async (req) => {
   console.log('Request received:', req.method, req.url)
+  // Ensure we have a URL object for query param parsing
+  let url: URL
+  try {
+    url = new URL(req.url)
+  } catch {
+    // Some runtimes may provide relative URL, fallback to dummy origin
+    url = new URL(req.url, 'http://localhost')
+  }
   
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -335,42 +344,173 @@ serve(async (req) => {
         }
       }
 
-      // Special command: heartbeat -> record device heartbeat
-      if (body.type === 'heartbeat') {
-        const deviceId = body.device_id || body.deviceId
-        const heartbeatType = body.heartbeat_type || body.heartbeatType || 'pong'
-        if (!deviceId) {
-          return new Response(JSON.stringify({ error: 'device_id required for heartbeat' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+      // Special command: tank_reading -> store sensor data in database
+      if (body.type === 'tank_reading' || body.type === 'sensor_data') {
+        // The ESP32 sends: { type: 'sensor_data', data: { type:'sensor_data', payload: { ...fields } }, apikey, device_id, ... }
+        // Older firmware may send: { type:'tank_reading', tank_type:..., level_percentage:... }
+        const primary = body.data || body.payload || body
+        const nested = (primary && (primary.payload || primary.data)) || null
+        const sensorData = nested || primary
+        console.log('Parsed sensor data raw:', JSON.stringify(body).slice(0,500))
+        console.log('Resolved sensorData:', sensorData)
+
+        if (!sensorData?.tank_type && !sensorData?.esp32_id && !(body.device_id)) {
+          return new Response(JSON.stringify({ error: 'tank_type or esp32_id required (after nested resolution)' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
         }
         try {
+          const esp32Id = sensorData.esp32_id || body.device_id || sensorData.device_id
+          const inferredTankType = sensorData.tank_type || (esp32Id?.toUpperCase()?.includes('SUMP') ? 'sump_tank' : 'top_tank')
+          const reading = {
+            tank_type: inferredTankType,
+            level_percentage: sensorData.level_percentage ?? sensorData.levelPercent ?? null,
+            level_liters: sensorData.level_liters ?? sensorData.levelLiters ?? null,
+            sensor_health: sensorData.sensor_health || 'good',
+            esp32_id: esp32Id,
+            battery_voltage: sensorData.battery_voltage ?? sensorData.battery ?? null,
+            signal_strength: sensorData.signal_strength ?? sensorData.rssi ?? null,
+            float_switch: sensorData.float_switch ?? null,
+            motor_running: sensorData.motor_running ?? null,
+            motor_status: sensorData.motor_status || (sensorData.motor_running ? 'running' : 'stopped'),
+            manual_override: sensorData.manual_override ?? null,
+            auto_mode_enabled: sensorData.auto_mode_enabled ?? null,
+            firmware_version: sensorData.firmware_version || null,
+            build_timestamp: sensorData.build_timestamp || null,
+            connection_state: sensorData.connection_state || null,
+            backend_responsive: sensorData.backend_responsive ?? null,
+            timestamp: sensorData.timestamp || new Date().toISOString()
+          }
+
           const { error } = await supabase
-            .from('device_heartbeats')
-            .insert({
-              device_id: deviceId,
-              heartbeat_type: heartbeatType,
-              timestamp: new Date().toISOString(),
-              metadata: body.metadata || {}
-            })
+            .from('tank_readings')
+            .insert(reading)
+
           if (error) throw error
-          
-          // Also broadcast heartbeat to SSE connections for real-time monitoring
-          const heartbeatData = JSON.stringify({
-            type: 'device_heartbeat',
-            data: {
-              device_id: deviceId,
-              heartbeat_type: heartbeatType,
-              timestamp: new Date().toISOString()
-            },
+
+          // Broadcast the reading to SSE connections (include original for debugging)
+          const broadcastData = JSON.stringify({
+            type: 'tank_reading',
+            data: reading,
+            raw: { nested: !!nested },
             timestamp: new Date().toISOString()
           })
           for (const controller of connections.values()) {
-            try { controller.enqueue(`data: ${heartbeatData}\n\n`) } catch (error) { console.error('Error broadcasting heartbeat:', error) }
+            try { controller.enqueue(`data: ${broadcastData}\n\n`) } catch (error) { console.error('Error broadcasting tank reading:', error) }
           }
-          
-          return new Response(JSON.stringify({ success: true, message: 'Heartbeat recorded' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+
+          return new Response(JSON.stringify({ success: true, message: 'Tank reading stored', nested: !!nested }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
         } catch (error) {
-          console.error('Error recording heartbeat:', error)
-          return new Response(JSON.stringify({ error: 'Failed to record heartbeat' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+          console.error('Error storing tank reading:', error)
+          return new Response(JSON.stringify({ error: 'Failed to store tank reading' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+      }
+
+      // Special command: system_status -> update system status
+      if (body.type === 'system_status') {
+        const statusData = body.data || body
+        try {
+          const systemStatus = {
+            wifi_connected: statusData.wifi_connected,
+            temperature: statusData.temperature,
+            uptime: statusData.uptime,
+            esp32_top_status: statusData.esp32_top_status,
+            esp32_sump_status: statusData.esp32_sump_status,
+            battery_level: statusData.battery_level,
+            wifi_strength: statusData.wifi_strength,
+            timestamp: new Date().toISOString()
+          }
+
+          const { error } = await supabase
+            .from('system_status')
+            .insert(systemStatus)
+
+          if (error) throw error
+
+          // Broadcast system status to SSE connections
+          const broadcastData = JSON.stringify({
+            type: 'system_status',
+            data: systemStatus,
+            timestamp: new Date().toISOString()
+          })
+          for (const controller of connections.values()) {
+            try { controller.enqueue(`data: ${broadcastData}\n\n`) } catch (error) { console.error('Error broadcasting system status:', error) }
+          }
+
+          return new Response(JSON.stringify({ success: true, message: 'System status updated' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } catch (error) {
+          console.error('Error updating system status:', error)
+          return new Response(JSON.stringify({ error: 'Failed to update system status' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+      }
+
+      // Special command: motor_event -> store motor event data
+      if (body.type === 'motor_event') {
+        const eventData = body.data || body
+        try {
+          const motorEvent = {
+            event_type: eventData.event_type || eventData.type,
+            duration: eventData.duration,
+            power_detected: eventData.power_detected,
+            current_draw: eventData.current_draw,
+            runtime_seconds: eventData.runtime_seconds,
+            timestamp: eventData.timestamp || new Date().toISOString()
+          }
+
+          const { error } = await supabase
+            .from('motor_events')
+            .insert(motorEvent)
+
+          if (error) throw error
+
+          // Broadcast motor event to SSE connections
+          const broadcastData = JSON.stringify({
+            type: 'motor_event',
+            data: motorEvent,
+            timestamp: new Date().toISOString()
+          })
+          for (const controller of connections.values()) {
+            try { controller.enqueue(`data: ${broadcastData}\n\n`) } catch (error) { console.error('Error broadcasting motor event:', error) }
+          }
+
+          return new Response(JSON.stringify({ success: true, message: 'Motor event recorded' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } catch (error) {
+          console.error('Error recording motor event:', error)
+          return new Response(JSON.stringify({ error: 'Failed to record motor event' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
+      }
+
+      // Special command: alert -> store alert data
+      if (body.type === 'alert') {
+        const alertData = body.data || body
+        try {
+          const alert = {
+            type: alertData.type || 'info',
+            title: alertData.title || 'ESP32 Alert',
+            message: alertData.message || 'Alert from ESP32 device',
+            severity: alertData.severity || 'medium',
+            esp32_id: alertData.esp32_id || body.device_id,
+            timestamp: alertData.timestamp || new Date().toISOString()
+          }
+
+          const { error } = await supabase
+            .from('alerts')
+            .insert(alert)
+
+          if (error) throw error
+
+          // Broadcast alert to SSE connections
+          const broadcastData = JSON.stringify({
+            type: 'alert',
+            data: alert,
+            timestamp: new Date().toISOString()
+          })
+          for (const controller of connections.values()) {
+            try { controller.enqueue(`data: ${broadcastData}\n\n`) } catch (error) { console.error('Error broadcasting alert:', error) }
+          }
+
+          return new Response(JSON.stringify({ success: true, message: 'Alert recorded' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } catch (error) {
+          console.error('Error recording alert:', error)
+          return new Response(JSON.stringify({ error: 'Failed to record alert' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
         }
       }
 

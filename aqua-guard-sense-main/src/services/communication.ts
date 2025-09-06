@@ -311,8 +311,8 @@ export function createCommunicationService(): EnhancedCommunicationService {
   const config: CommunicationConfig = {
     supabaseUrl: import.meta.env.VITE_SUPABASE_URL || 'your-supabase-url',
     supabaseKey: import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-supabase-anon-key',
-    backendUrl: import.meta.env.VITE_BACKEND_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co',
-    wsUrl: import.meta.env.VITE_WEBSOCKET_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co/functions/v1/websocket',
+  backendUrl: import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001',
+  wsUrl: import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'ws://localhost:8083',
     maxRetries: 5,
     retryDelay: 1000,
     connectionTimeout: 10000

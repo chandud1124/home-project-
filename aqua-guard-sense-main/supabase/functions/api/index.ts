@@ -3,7 +3,9 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-requested-with, accept, accept-encoding, accept-language, cache-control, connection, host, pragma, referer, sec-fetch-dest, sec-fetch-mode, sec-fetch-site, sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
+  'Access-Control-Max-Age': '86400',
 }
 
 serve(async (req) => {

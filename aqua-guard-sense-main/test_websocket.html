@@ -12,12 +12,12 @@
         const status = document.getElementById('status');
         const messages = document.getElementById('messages');
         
-        const ws = new WebSocket('wss://dwcouaacpqipvvsxiygo.supabase.co/functions/v1/websocket');
+        const ws = new WebSocket('ws://127.0.0.1:54321/functions/v1/websocket');
         
         ws.onopen = () => {
             status.textContent = 'Connected';
             status.style.color = 'green';
-            ws.send(JSON.stringify({ type: 'ping', apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4' }));
+            ws.send(JSON.stringify({ type: 'ping', apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0' }));
         };
         
         ws.onmessage = (event) => {

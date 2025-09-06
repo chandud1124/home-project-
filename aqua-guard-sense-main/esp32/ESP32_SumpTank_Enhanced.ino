@@ -63,22 +63,18 @@
 
 // ========== CONFIGURATION SECTION ==========
 
-// WiFi Configuration - UPDATE THESE VALUES FOR YOUR NETWORK
+// WiFi Configuration - UPDATED FOR YOUR NETWORK
 const char* WIFI_SSID = "I am Not A Witch I am Your Wifi";
 const char* WIFI_PASSWORD = "Whoareu@0000";
 
-// Backend Configuration (Direct Express API) - UPDATE BACKEND_HOST BEFORE DEPLOY
-// Previous Supabase Edge Function path deprecated in favor of direct device API ingestion.
-const char* BACKEND_HOST = "192.168.0.100";      // Change to LAN IP or public domain
-const uint16_t BACKEND_PORT = 3001;               // 443 if using HTTPS via reverse proxy
-const bool BACKEND_USE_TLS = false;               // Set true if using HTTPS
-// API Paths
-const char* PATH_SENSOR_DATA = "/api/esp32/sensor-data";
-const char* PATH_HEARTBEAT   = "/api/esp32/heartbeat";
-const char* PATH_MOTOR_STATUS= "/api/esp32/motor-status";
-// Legacy constants kept temporarily (will be removed)
-const char* SUPABASE_URL = ""; // unused
-const char* SUPABASE_ANON_KEY = ""; // unused
+// Backend Configuration (Supabase Edge Functions) - UPDATED FOR PRODUCTION
+// Previous Express API deprecated in favor of Supabase Edge Functions.
+const char* BACKEND_HOST = "dwcouaacpqipvvsxiygo.supabase.co";      // Supabase project URL
+const uint16_t BACKEND_PORT = 443;               // HTTPS port for Supabase
+const bool BACKEND_USE_TLS = true;               // Always true for Supabase
+// API Paths (updated for Supabase functions)
+#include "firmware_common.h"
+// Legacy Express constants removed (device now posts directly to Supabase functions)
 
 // Firmware Metadata
 #define FIRMWARE_VERSION "2.1.0"
@@ -183,7 +179,7 @@ void checkBrownOut();
 
 // ========== LIBRARIES ==========
 #include <WiFi.h>
-// #include <WebSocketsClient.h> // Legacy WebSocket (deprecated in favor of HTTPS POST + SSE downstream)
+// (WebSocket client removed – using stateless HTTPS POST only)
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
@@ -238,12 +234,12 @@ const unsigned long BASE_RECONNECT_DELAY = 5000; // 5 seconds base delay
 const unsigned long MAX_RECONNECT_DELAY = 300000; // 5 minutes max delay
 
 // ========== GLOBAL VARIABLES ==========
-// WebSocketsClient webSocket; // Disabled: using HTTPS POST (legacy placeholder)
+// (Removed WebSocket client placeholder)
 WebServer server(HTTP_PORT);
 unsigned long lastHeartbeat = 0;
 unsigned long lastSensorRead = 0;
 bool wifiConnected = false;
-// bool websocketConnected = false; // Disabled: using HTTPS POST
+// (Removed websocketConnected flag)
 
 // Sensor readings
 float sumpLevel = 0.0;
@@ -273,11 +269,10 @@ unsigned long lastModeSwitchTime = 0;
 unsigned long lastManualMotorSwitchTime = 0;
 
 // Error handling and recovery variables
-// int websocketErrorCount = 0; // Disabled: using HTTPS POST
-// int websocketReconnectAttempts = 0; // Disabled: using HTTPS POST
+// (Removed legacy WebSocket error counters)
 int wifiReconnectAttempts = 0;
 unsigned long lastWifiReconnectAttempt = 0;
-// unsigned long lastWebsocketReconnectAttempt = 0; // Disabled: using HTTPS POST
+// (Removed lastWebsocketReconnectAttempt)
 
 // WiFi stability monitoring
 unsigned long wifiLastConnectedTime = 0;
@@ -387,7 +382,7 @@ void processMessageQueue() {
     Serial.print("QUEUE: Attempting resend (attempt ");
     Serial.print(messageQueue[i].attempts + 1);
     Serial.println(")");
-  bool ok = postToBackend(messageQueue[i].payload, PATH_SENSOR_DATA);
+  bool ok = postToBackend(messageQueue[i].payload, FW_PATH_SENSOR_DATA);
     if (ok) {
       Serial.println("QUEUE: Resend success - removing message");
       messageQueue[i].payload = "";
@@ -1110,6 +1105,7 @@ void sendSensorData() {
   payloadDoc["esp32_id"] = DEVICE_ID;
   payloadDoc["firmware_version"] = FIRMWARE_VERSION;
   payloadDoc["build_timestamp"] = BUILD_TIMESTAMP;
+  payloadDoc["protocol_version"] = FW_PROTOCOL_VERSION;
   payloadDoc["battery_voltage"] = 3.3;
   payloadDoc["signal_strength"] = WiFi.RSSI();
   payloadDoc["float_switch"] = floatSwitchOn;
@@ -1126,12 +1122,14 @@ void sendSensorData() {
 
   doc["type"] = "sensor_data";
   doc["payload"] = payloadDoc;
+  doc["protocol_version"] = FW_PROTOCOL_VERSION; // duplicate at wrapper for backend convenience
 
   // Use device-specific authentication
   outer["apikey"] = DEVICE_API_KEY;
   outer["device_id"] = DEVICE_ID;
   outer["type"] = "sensor_data";
   outer["data"] = doc; // doc contains { type, payload }
+  outer["protocol_version"] = FW_PROTOCOL_VERSION;
   String jsonString;
   serializeJson(outer, jsonString);
   
@@ -1142,7 +1140,7 @@ void sendSensorData() {
   // Compute HMAC but send via headers; keep body lean
   String timestamp = String(millis()/1000); // seconds epoch for backend tolerance
   String signature = generateHMACSignature(jsonString, timestamp);
-  if (postToBackendWithAuth(jsonString, PATH_SENSOR_DATA, timestamp, signature)) {
+  if (postToBackendWithAuth(jsonString, FW_PATH_SENSOR_DATA, timestamp, signature)) {
     Serial.println("DATA: (HTTP) Sump sensor data sent - Level: " + String(sumpLevel, 1) + "%, Motor: " + motorStatus);
     logEvent("SENSOR_DATA_SENT", "Sensor data sent successfully with checksum: " + String(checksum) + " and HMAC signature");
     
@@ -1167,12 +1165,14 @@ void sendTankReading() {
   doc["firmware_version"] = FIRMWARE_VERSION;
   doc["build_timestamp"] = BUILD_TIMESTAMP;
   doc["timestamp"] = millis();
+  doc["protocol_version"] = FW_PROTOCOL_VERSION;
 
   StaticJsonDocument<384> outer;
   outer["apikey"] = DEVICE_API_KEY;
   outer["device_id"] = DEVICE_ID;
   outer["type"] = "tank_reading";
   outer["data"] = doc;
+  outer["protocol_version"] = FW_PROTOCOL_VERSION;
   String jsonString;
   serializeJson(outer, jsonString);
   // Add HMAC signature (optional for compatibility)
@@ -1182,7 +1182,7 @@ void sendTankReading() {
   outer["hmac_signature"] = signature;
   jsonString = "";
   serializeJson(outer, jsonString);
-  if (postToBackend(jsonString, PATH_SENSOR_DATA)) {
+  if (postToBackend(jsonString, FW_PATH_SENSOR_DATA)) {
     Serial.println("DATA: (HTTP) Sump tank reading sent - Level: " + String(sumpLevel, 1) + "% (HMAC)");
   } else {
     Serial.println("DATA: (HTTP) Failed to send tank reading");
@@ -1217,7 +1217,7 @@ void sendMotorStatus() {
   outer["hmac_signature"] = signature;
   jsonString = "";
   serializeJson(outer, jsonString);
-  if (postToBackend(jsonString, PATH_MOTOR_STATUS)) {
+  if (postToBackend(jsonString, FW_PATH_MOTOR_STATUS)) {
     Serial.print("DATA: (HTTP) Motor status sent (HMAC): ");
     Serial.println(motorStatus);
   } else {
@@ -1251,7 +1251,7 @@ void sendSystemAlert(String alertType, String message) {
   outer["hmac_signature"] = signature;
   jsonString = "";
   serializeJson(outer, jsonString);
-  if (postToBackend(jsonString, PATH_SENSOR_DATA)) { // reuse sensor endpoint for alerts or create dedicated if needed
+  if (postToBackend(jsonString, FW_PATH_SYSTEM_ALERT)) { // dedicated system alert endpoint
     Serial.print("ALERT: (HTTP) System alert sent (HMAC): ");
     Serial.println(alertType);
   } else {
@@ -1284,7 +1284,7 @@ void sendPing() {
   
   String timestamp = String(millis()/1000);
   String signature = generateHMACSignature(jsonString, timestamp);
-  if (!postToBackendWithAuth(jsonString, PATH_SENSOR_DATA, timestamp, signature)) {
+  if (!postToBackendWithAuth(jsonString, FW_PATH_SENSOR_DATA, timestamp, signature)) {
     enqueueMessage(jsonString);
   }
 }
@@ -1309,7 +1309,7 @@ void sendHeartbeatAck() {
   
   String timestamp = String(millis()/1000);
   String signature = generateHMACSignature(jsonString, timestamp);
-  if (!postToBackendWithAuth(jsonString, PATH_SENSOR_DATA, timestamp, signature)) {
+  if (!postToBackendWithAuth(jsonString, FW_PATH_SENSOR_DATA, timestamp, signature)) {
     enqueueMessage(jsonString);
   }
 }

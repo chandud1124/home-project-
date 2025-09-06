@@ -3,7 +3,7 @@
  * Dedicated top tank monitoring and motor command system
  *
  * Features:
- * - WiFi connectivity with WebSocket communication
+ * - WiFi connectivity with HTTPS POST communication
  * - AJ-SR04M Ultrasonic sensor for top tank water level measurement
  * - Real-time data transmission to backend
  * - Motor control commands sent to Sump Tank ESP32
@@ -40,7 +40,7 @@
  * - LED -> ESP32 GPIO 15 (optional)
  *
  * Communication:
- * - WebSocket to backend for data transmission
+* - HTTPS POST to backend for data transmission
  * - Commands to Sump Tank ESP32 for motor control
  *
  * IMPORTANT: AJ-SR04M cannot reliably detect distances below 20cm
@@ -49,25 +49,20 @@
 
 // ========== CONFIGURATION SECTION ==========
 
-// WiFi Configuration - UPDATE THESE VALUES FOR YOUR NETWORK
+// WiFi Configuration - UPDATED FOR YOUR NETWORK
 const char* WIFI_SSID = "I am Not A Witch I am Your Wifi";
 const char* WIFI_PASSWORD = "Whoareu@0000";
 
-// Backend Configuration (Express API) - UPDATE HOST/IP
-const char* BACKEND_HOST = "192.168.0.100";   // Change to backend domain/IP
-const uint16_t BACKEND_PORT = 3001;            // Use 443 if HTTPS proxy
-const bool BACKEND_USE_TLS = false;            // Set true if using HTTPS
-const char* PATH_SENSOR_DATA = "/api/esp32/sensor-data";
-const char* PATH_HEARTBEAT   = "/api/esp32/heartbeat";
-// Secrets (create secrets.h from secrets.example.h, not committed)
-#include "secrets.h" // defines DEVICE_API_KEY, HMAC_SECRET
-// Legacy Supabase constants (unused now)
-const char* SUPABASE_URL = "";
-const char* WEBSOCKET_PATH = "";
-const char* SUPABASE_ANON_KEY = "";
-
-const char* BACKEND_HOST = "192.168.0.100";   // Change to backend domain/IP
-const uint16_t BACKEND_PORT = 3001;            // Use 443 if HTTPS proxy
+// Backend Configuration (Supabase Edge Functions) - UPDATED FOR PRODUCTION
+// Backend Configuration (Direct Express API) - updated BEFORE deploy
+const char* BACKEND_HOST = "dwcouaacpqipvvsxiygo.supabase.co";   // Supabase project URL
+const uint16_t BACKEND_PORT = 443;            // HTTPS port
+const bool BACKEND_USE_TLS = true;            // true for Supabase
+// Endpoint paths centralized
+#include "firmware_common.h"
+// Secrets (create secrets.h from secrets.example.h)
+#include "secrets.h" // defines DEVICE_API_KEY, DEVICE_HMAC_SECRET
+// Legacy Supabase constants removed (fully migrated to direct backend)
 
 // Device Configuration
 const char* DEVICE_TYPE = "top_tank_monitor";
@@ -78,7 +73,8 @@ const char* DEVICE_ID = "ESP32_TOP_002";  // Updated to unique ID
 #define BUILD_TIMESTAMP __DATE__ " " __TIME__
 
 // Sump Tank ESP32 Configuration (for motor commands)
-const char* SUMP_ESP32_IP = "192.168.0.184";  // Updated with actual Sump ESP32 IP address
+// NOTE: Update SUMP_ESP32_IP with the actual IP address of your Sump ESP32 after it connects to WiFi
+const char* SUMP_ESP32_IP = "192.168.0.184";  // Will be updated with actual Sump ESP32 IP address
 const int SUMP_ESP32_PORT = 80;
 
 // Hardware Pin Configuration
@@ -104,7 +100,7 @@ const float MIN_SENSOR_DISTANCE_CM = 20.0;  // Minimum reliable detection distan
 const float MAX_SENSOR_DISTANCE_CM = 450.0; // Maximum detection distance
 
 // ========== LIBRARIES ==========
-//#include <WebSocketsClient.h> // Deprecated - moving to HTTPS POST only
+// WebSocket library removed after migration to stateless HTTPS POST
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -164,7 +160,7 @@ String generateHMACSignatureTop(const String &payload, const String &timestamp) 
     mbedtls_md_free(&ctx);
     return String("");
   }
-  mbedtls_md_hmac_starts(&ctx, (const unsigned char*)HMAC_SECRET, strlen(HMAC_SECRET));
+  mbedtls_md_hmac_starts(&ctx, (const unsigned char*)DEVICE_HMAC_SECRET, strlen(DEVICE_HMAC_SECRET));
   mbedtls_md_hmac_update(&ctx, (const unsigned char*)dataToSign.c_str(), dataToSign.length());
   mbedtls_md_hmac_finish(&ctx, hmacResult);
   mbedtls_md_free(&ctx);
@@ -216,12 +212,10 @@ bool postToBackendTop(const String &jsonPayload, const char* path, const String 
   http.end();
   return status == 200;
 }
-  return status == 200;
-}
 unsigned long lastHeartbeat = 0;
 unsigned long lastSensorRead = 0;
 bool wifiConnected = false;
-bool websocketConnected = false;
+// (Removed) websocketConnected flag - no persistent socket now
 
 // Sensor readings
 float currentLevel = 0.0;
@@ -239,11 +233,10 @@ bool lowLevelAlert = false;
 bool criticalLevelAlert = false;
 
 // Error handling and recovery variables
-int websocketErrorCount = 0;
-int websocketReconnectAttempts = 0;
+// (Removed) websocketErrorCount / websocketReconnectAttempts - legacy
 int wifiReconnectAttempts = 0;
 unsigned long lastWifiReconnectAttempt = 0;
-unsigned long lastWebsocketReconnectAttempt = 0;
+// (Removed) lastWebsocketReconnectAttempt - legacy
 
 // Heartbeat and keep-alive variables (IMPROVED - No auto restart)
 unsigned long lastHeartbeatResponse = 0;
@@ -324,7 +317,7 @@ void processTopQueue() {
     if (now < topQueue[i].nextAttempt) continue;
     Serial.print("QUEUE: Top resend attempt ");
     Serial.println(topQueue[i].attempts + 1);
-  bool ok = postToBackendTop(topQueue[i].payload, PATH_SENSOR_DATA);
+  bool ok = postToBackendTop(topQueue[i].payload, FW_PATH_SENSOR_DATA);
     if (ok) {
       Serial.println("QUEUE: Top resend success");
       topQueue[i].payload = "";
@@ -723,6 +716,7 @@ void sendSensorData() {
   payloadDoc["esp32_id"] = DEVICE_ID;
   payloadDoc["firmware_version"] = FIRMWARE_VERSION;
   payloadDoc["build_timestamp"] = BUILD_TIMESTAMP;
+  payloadDoc["protocol_version"] = FW_PROTOCOL_VERSION;
   payloadDoc["battery_voltage"] = 3.3;
   payloadDoc["signal_strength"] = WiFi.RSSI();
   payloadDoc["motor_command_sent"] = motorRunning;
@@ -731,6 +725,7 @@ void sendSensorData() {
 
   doc["type"] = "sensor_data";
   doc["payload"] = payloadDoc;
+  doc["protocol_version"] = FW_PROTOCOL_VERSION;
 
   // Wrap for HTTPS POST
   StaticJsonDocument<640> outer;
@@ -738,6 +733,7 @@ void sendSensorData() {
   outer["device_id"] = DEVICE_ID;
   outer["type"] = "sensor_data";
   outer["data"] = doc; // doc has type + payload
+  outer["protocol_version"] = FW_PROTOCOL_VERSION;
   String jsonBody; serializeJson(outer, jsonBody);
   if (!ensureTimeSynced()) {
     Serial.println("TIME: NTP sync failed, using millis-based fallback timestamp");
@@ -750,7 +746,7 @@ void sendSensorData() {
   Serial.println(jsonString);
   Serial.println("📤 SENDING TO BACKEND...");
 
-  if (postToBackendTop(jsonBody, PATH_SENSOR_DATA, &ts, &sig)) {
+  if (postToBackendTop(jsonBody, FW_PATH_SENSOR_DATA, &ts, &sig)) {
     Serial.println("✅ SUCCESS: (HTTP) Sensor data sent to backend");
   } else {
     Serial.println("❌ ERROR: (HTTP) Failed to send sensor data - queued");
@@ -792,7 +788,7 @@ void sendPing() {
   Serial.println(jsonString);
   Serial.println("📤 SENDING PING...");
 
-  if (postToBackendTop(jsonBody, PATH_HEARTBEAT, &ts, &sig)) {
+  if (postToBackendTop(jsonBody, FW_PATH_HEARTBEAT, &ts, &sig)) {
     Serial.println("✅ SUCCESS: (HTTP) Ping sent to backend");
   } else {
     Serial.println("❌ ERROR: (HTTP) Ping failed - queued");
@@ -823,68 +819,6 @@ unsigned long calculateReconnectDelay() {
   return min(delay, MAX_RECONNECT_DELAY);
 }
 
-// Attempt WebSocket reconnection with smart backoff
-void attemptWebSocketReconnection() {
-  if (connectionState == CONNECTING || connectionState == CONNECTED) {
-    return; // Already attempting connection
-  }
-
-  unsigned long now = millis();
-  unsigned long delay = calculateReconnectDelay();
-
-  if (now - lastConnectionAttempt < delay) {
-    return; // Too soon to retry
-  }
-
-  Serial.print("REFRESH: Attempting WebSocket reconnection (attempt ");
-  Serial.print(connectionAttempts + 1);
-  Serial.print("/");
-  Serial.print(MAX_CONNECTION_ATTEMPTS);
-  Serial.print(") in ");
-  Serial.print(delay / 1000);
-  Serial.println(" seconds...");
-
-  connectionState = CONNECTING;
-  connectionAttempts++;
-  lastConnectionAttempt = now;
-
-  // webSocket.begin(SUPABASE_URL, 443, WEBSOCKET_PATH);  // (Deprecated) Supabase WebSocket disabled
-  // webSocket.setAuthorization("Bearer", SUPABASE_ANON_KEY); // Uncomment if needed
-}
-
-// WebSocket event handler (IMPROVED)
-/* (Deprecated) WebSocket event handler removed after migration to HTTPS POST
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-  switch(type) {
-    case WStype_DISCONNECTED:
-      Serial.println("WEBSOCKET: WebSocket disconnected");
-      websocketConnected = false;
-      backendResponsive = false;
-
-      if (connectionState == STABLE) {
-        Serial.println("WARNING: Stable connection lost - entering reconnection mode");
-        connectionState = RECONNECTING;
-        connectionAttempts = 0; // Reset attempts for reconnection
-      } else {
-        connectionState = DISCONNECTED;
-      }
-      break;
-
-    case WStype_CONNECTED:
-      Serial.println("SUCCESS: WebSocket connected successfully!");
-      websocketConnected = true;
-      backendResponsive = true;
-      connectionEstablishedTime = millis();
-      connectionAttempts = 0; // Reset on successful connection
-
-      if (connectionState != STABLE) {
-        connectionState = CONNECTED;
-        Serial.println("REFRESH: Connection established - monitoring for stability");
-      }
-
-      // Send device registration
-      {
-        StaticJsonDocument<256> doc;
         doc["type"] = "esp32_register";
         doc["esp32_id"] = DEVICE_ID;
         doc["device_type"] = DEVICE_TYPE;
@@ -1051,7 +985,7 @@ void setup() {
   Serial.println("=== Aqua Guard Sense ESP32 Top Tank Monitor v2.0 (CRASH-ONLY) ===");
   Serial.println("START: ESP32 STARTUP - Device restarted or powered on");
   Serial.println("Top Tank Sensor: AJ-SR04M Ultrasonic Sensor (TRIG/ECHO)");
-  Serial.println("Communication: WiFi + WebSocket to Backend + HTTP to Sump ESP32");
+  Serial.println("Communication: WiFi + HTTPS POST to Backend + HTTP to Sump ESP32");
   Serial.print("Top Tank: Cylindrical, Diameter ");
   Serial.print(TANK_DIAMETER_CM);
   Serial.print("cm, Height ");
@@ -1150,12 +1084,12 @@ void setup() {
   // Poll for any commands targeting top tank (future extensibility)
   topPollCommands();
 
-  // WebSocket removed - using periodic HTTPS POST only
+  // Using periodic HTTPS POST only (WebSocket removed)
   if (wifiConnected) {
-    Serial.println("INFO: Skipping WebSocket init (deprecated) - using HTTP POST only");
+  Serial.println("INFO: Skipping legacy socket init - using HTTP POST only");
     connectionState = CONNECTED; // Treat as connected for state tracking
   } else {
-    Serial.println("ERROR: Cannot initialize WebSocket - WiFi not connected");
+  Serial.println("ERROR: Cannot initialize network - WiFi not connected");
   }
 
   Serial.println("========== Setup Complete ==========");
@@ -1218,10 +1152,9 @@ void loop() {
     }
   }
 
-  // webSocket.loop(); // Removed - using HTTPS POST only
+  // (Socket loop removed) Using stateless HTTPS POST only
 
-  // Verify WebSocket connection status after loop
-  // (Removed) WebSocket status tracking
+  // (Removed) Legacy socket status tracking
 
   // Read sensors periodically
   if (millis() - lastSensorRead > 3000) {
@@ -1299,14 +1232,14 @@ void loop() {
   }
 
   // IMPROVED: Smart reconnection logic
-  // (Removed) WebSocket reconnection logic
+  // (Removed) Legacy reconnection logic
 
   // Reconnect WiFi if disconnected
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiConnected) {
       Serial.println(" WiFi disconnected!");
       wifiConnected = false;
-      websocketConnected = false;
+  // (Removed) websocketConnected flag update
       connectionState = DISCONNECTED;
     }
     connectToWiFi();
@@ -1320,7 +1253,7 @@ void loop() {
     Serial.print(wifiConnected ? "SUCCESS: CONNECTED" : "ERROR: DISCONNECTED");
     Serial.print(" | IP: ");
     Serial.println(WiFi.localIP());
-    Serial.print("DATA: WebSocket: ");
+  Serial.print("DATA: Transport mode: HTTPS POST");
     Serial.print(websocketConnected ? "SUCCESS: CONNECTED" : "ERROR: DISCONNECTED");
     Serial.print(" | State: ");
     Serial.println(getConnectionStateString());

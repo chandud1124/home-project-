@@ -50,23 +50,19 @@
 // ========== CONFIGURATION SECTION ==========
 
 // WiFi Configuration - UPDATED FOR YOUR NETWORK
-const char* WIFI_SSID = "I am Not A Witch I am Your Wifi";
-const char* WIFI_PASSWORD = "Whoareu@0000";
+const char* WIFI_SSID = WIFI_SSID;  // From esp32_config.h
+const char* WIFI_PASSWORD = WIFI_PASSWORD;  // From esp32_config.h
 
 // Backend Configuration (Supabase Edge Functions) - UPDATED FOR PRODUCTION
-// Backend Configuration (Direct Express API) - updated BEFORE deploy
-const char* BACKEND_HOST = "dwcouaacpqipvvsxiygo.supabase.co";   // Supabase project URL
-const uint16_t BACKEND_PORT = 443;            // HTTPS port
-const bool BACKEND_USE_TLS = true;            // true for Supabase
-// Endpoint paths centralized
-#include "firmware_common.h"
-// Secrets (create secrets.h from secrets.example.h)
-#include "secrets.h" // defines DEVICE_API_KEY, DEVICE_HMAC_SECRET
-// Legacy Supabase constants removed (fully migrated to direct backend)
+const char* BACKEND_HOST = BACKEND_HOST;   // From esp32_config.h
+const uint16_t BACKEND_PORT = BACKEND_PORT;            // From esp32_config.h
+const bool BACKEND_USE_TLS = BACKEND_USE_TLS;            // From esp32_config.h
 
 // Device Configuration
 const char* DEVICE_TYPE = "top_tank_monitor";
-const char* DEVICE_ID = "ESP32_TOP_002";  // Updated to unique ID
+const char* DEVICE_ID = DEVICE_ID;  // From esp32_config.h
+const char* DEVICE_API_KEY = DEVICE_API_KEY;  // From esp32_config.h
+const char* DEVICE_HMAC_SECRET = DEVICE_HMAC_SECRET;  // From esp32_config.h
 
 // Firmware Metadata
 #define FIRMWARE_VERSION "2.1.0"
@@ -74,7 +70,7 @@ const char* DEVICE_ID = "ESP32_TOP_002";  // Updated to unique ID
 
 // Sump Tank ESP32 Configuration (for motor commands)
 // NOTE: Update SUMP_ESP32_IP with the actual IP address of your Sump ESP32 after it connects to WiFi
-const char* SUMP_ESP32_IP = "192.168.0.184";  // Will be updated with actual Sump ESP32 IP address
+const char* SUMP_ESP32_IP = "192.168.0.184";  // Updated with actual Sump ESP32 IP address
 const int SUMP_ESP32_PORT = 80;
 
 // Hardware Pin Configuration
@@ -192,13 +188,22 @@ bool postToBackendTop(const String &jsonPayload, const char* path, const String 
     return false;
   }
   http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + String(DEVICE_API_KEY));
   http.addHeader("x-device-id", DEVICE_ID);
-  http.addHeader("x-api-key", DEVICE_API_KEY);
   if (timestampPtr && signaturePtr) {
     http.addHeader("x-timestamp", *timestampPtr);
     http.addHeader("x-signature", *signaturePtr);
   }
+  Serial.print("HTTP: Attempting to connect to backend (top): ");
+  Serial.println(String(BACKEND_HOST) + String(path));
+  Serial.print("HTTP: Full URL (top): ");
+  Serial.println(url);
+  Serial.println("HTTP: Sending POST request (top)...");
+  Serial.print("HTTP: Payload (top): ");
+  Serial.println(jsonPayload);
   int status = http.POST(jsonPayload);
+  Serial.print("HTTP: Response status (top): ");
+  Serial.println(status);
   if (status <= 0) {
     Serial.print("HTTP: POST error (top): ");
     Serial.println(http.errorToString(status));
@@ -207,6 +212,10 @@ bool postToBackendTop(const String &jsonPayload, const char* path, const String 
   }
   Serial.print("HTTP: POST status (top) "); Serial.println(status);
   if (status != 200) {
+    Serial.println(http.getString());
+  } else {
+    Serial.println("HTTP: POST successful (top)");
+    Serial.println("HTTP: Response body (top):");
     Serial.println(http.getString());
   }
   http.end();
@@ -727,14 +736,23 @@ void sendSensorData() {
   doc["payload"] = payloadDoc;
   doc["protocol_version"] = FW_PROTOCOL_VERSION;
 
-  // Wrap for HTTPS POST
+  // Wrap for HTTPS POST - Simplified format
   StaticJsonDocument<640> outer;
   outer["apikey"] = DEVICE_API_KEY;
   outer["device_id"] = DEVICE_ID;
   outer["type"] = "sensor_data";
-  outer["data"] = doc; // doc has type + payload
+  outer["data"] = payloadDoc; // Send payload directly instead of wrapped doc
   outer["protocol_version"] = FW_PROTOCOL_VERSION;
-  String jsonBody; serializeJson(outer, jsonBody);
+  outer["timestamp"] = millis();
+  outer["tank_type"] = "top_tank";
+  outer["level_percentage"] = currentLevel;
+  outer["level_liters"] = waterVolume;
+  outer["sensor_health"] = "good";
+  outer["esp32_id"] = DEVICE_ID;
+  outer["firmware_version"] = FIRMWARE_VERSION;
+  outer["build_timestamp"] = BUILD_TIMESTAMP;
+  String jsonBody; 
+  serializeJson(outer, jsonBody);
   if (!ensureTimeSynced()) {
     Serial.println("TIME: NTP sync failed, using millis-based fallback timestamp");
   }
@@ -743,10 +761,10 @@ void sendSensorData() {
   String sig = generateHMACSignatureTop(jsonBody, ts);
 
   Serial.println("📦 JSON PAYLOAD:");
-  Serial.println(jsonString);
+  Serial.println(jsonBody);
   Serial.println("📤 SENDING TO BACKEND...");
 
-  if (postToBackendTop(jsonBody, FW_PATH_SENSOR_DATA, &ts, &sig)) {
+  if (postToBackendTop(jsonBody, FW_PATH_SENSOR_DATA)) {  // Use basic auth version
     Serial.println("✅ SUCCESS: (HTTP) Sensor data sent to backend");
   } else {
     Serial.println("❌ ERROR: (HTTP) Failed to send sensor data - queued");
@@ -785,7 +803,7 @@ void sendPing() {
   String sig = generateHMACSignatureTop(jsonBody, ts);
 
   Serial.println("📦 PING PAYLOAD:");
-  Serial.println(jsonString);
+  Serial.println(jsonBody);
   Serial.println("📤 SENDING PING...");
 
   if (postToBackendTop(jsonBody, FW_PATH_HEARTBEAT, &ts, &sig)) {

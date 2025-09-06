@@ -12,12 +12,14 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
+  "test:backend": "node --test backend/tests/*.test.js",
     "deploy": "./deploy.sh",
     "deploy:frontend": "npm run build && firebase deploy --only hosting",
     "deploy:backend": "supabase functions deploy",
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
-    "supabase:status": "supabase status"
+  "supabase:status": "supabase status",
+  "check:env": "node scripts/check-env.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

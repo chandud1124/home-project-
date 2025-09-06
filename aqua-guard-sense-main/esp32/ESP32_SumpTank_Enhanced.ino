@@ -69,9 +69,9 @@ const char* WIFI_PASSWORD = "Whoareu@0000";
 
 // Backend Configuration (Supabase Edge Functions) - UPDATED FOR PRODUCTION
 // Previous Express API deprecated in favor of Supabase Edge Functions.
-const char* BACKEND_HOST = "dwcouaacpqipvvsxiygo.supabase.co";      // Supabase project URL
-const uint16_t BACKEND_PORT = 443;               // HTTPS port for Supabase
-const bool BACKEND_USE_TLS = true;               // Always true for Supabase
+const char* BACKEND_HOST = BACKEND_HOST;      // From esp32_config.h
+const uint16_t BACKEND_PORT = BACKEND_PORT;               // From esp32_config.h
+const bool BACKEND_USE_TLS = BACKEND_USE_TLS;               // From esp32_config.h
 // API Paths (updated for Supabase functions)
 #include "firmware_common.h"
 // Legacy Express constants removed (device now posts directly to Supabase functions)
@@ -82,11 +82,13 @@ const bool BACKEND_USE_TLS = true;               // Always true for Supabase
 
 // Device Configuration
 const char* DEVICE_TYPE = "sump_tank_controller";
-const char* DEVICE_ID = "ESP32_SUMP_002";  // Updated to match actual device
+const char* DEVICE_ID = DEVICE_ID;  // From esp32_config.h
+const char* DEVICE_API_KEY = DEVICE_API_KEY;  // From esp32_config.h
+const char* DEVICE_HMAC_SECRET = DEVICE_HMAC_SECRET;  // From esp32_config.h
 
-// Device Authentication Configuration
-// Secrets moved to separate header (not committed). Create secrets.h from secrets.example.h
-#include "secrets.h" // defines DEVICE_API_KEY, DEVICE_HMAC_SECRET
+// WiFi Configuration
+const char* WIFI_SSID = WIFI_SSID;  // From esp32_config.h
+const char* WIFI_PASSWORD = WIFI_PASSWORD;  // From esp32_config.h
 
 // Root CA certificate (Let's Encrypt ISRG Root X1) for validating Supabase TLS (full chain entry)
 // Source: https://letsencrypt.org/certificates/ (ISRG Root X1 PEM)
@@ -441,8 +443,8 @@ bool postToBackend(const String &jsonPayload, const char* path) {
     }
 
     https.addHeader("Content-Type", "application/json");
+    https.addHeader("Authorization", "Bearer " + String(DEVICE_API_KEY));
     https.addHeader("x-device-id", DEVICE_ID);
-    https.addHeader("x-api-key", DEVICE_API_KEY);
     https.addHeader("Accept", "application/json");
 
     Serial.println("HTTP: Sending POST request...");
@@ -493,8 +495,8 @@ bool postToBackendWithAuth(const String &jsonPayload, const char* path, const St
     return false;
   }
   https.addHeader("Content-Type", "application/json");
+  https.addHeader("Authorization", "Bearer " + String(DEVICE_API_KEY));
   https.addHeader("x-device-id", DEVICE_ID);
-  https.addHeader("x-api-key", DEVICE_API_KEY);
   https.addHeader("x-timestamp", timestamp);
   https.addHeader("x-signature", signature);
   int code = https.POST(jsonPayload);

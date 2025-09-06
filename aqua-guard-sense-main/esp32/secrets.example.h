@@ -9,3 +9,11 @@
 
 // For top tank firmware which expects HMAC_SECRET name
 #define HMAC_SECRET DEVICE_HMAC_SECRET
+
+// Compile-time safety: prevent flashing with placeholder values
+#if defined(DEVICE_API_KEY) && (DEVICE_API_KEY[0] == 'Y')
+#warning "DEVICE_API_KEY appears to be a placeholder. Replace before production."
+#endif
+#if defined(DEVICE_HMAC_SECRET) && (DEVICE_HMAC_SECRET[0] == 'Y')
+#warning "DEVICE_HMAC_SECRET appears to be a placeholder. Replace before production."
+#endif

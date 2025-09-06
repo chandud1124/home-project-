@@ -26,6 +26,8 @@ HMAC_REQUIRED=false
 HMAC_TIME_DRIFT_SECONDS=300
 # Optional fallback map for quick provisioning (avoid in prod if using DB rows)
 DEVICE_KEYS_JSON={"ESP32_SUMP_002":{"api_key":"sump_key","hmac_secret":"sump_secret"},"ESP32_TOP_002":{"api_key":"top_key","hmac_secret":"top_secret"}}
+PROTOCOL_MIN_VERSION=1
+PROTOCOL_MAX_VERSION=1
 ```
 
 ## 3. Supabase Migrations
@@ -36,10 +38,24 @@ supabase db push   # or 'supabase migration up' if using generated migrations
 ```
 Confirm tables `tank_readings`, `motor_events`, `esp32_devices`, `alerts`, `system_status` exist.
 
+### 3.1 Seed Device Credentials (Preferred)
+Instead of using the fallback `DEVICE_KEYS_JSON`, seed devices directly:
+```
+supabase db execute --file supabase/seed_devices.sql
+```
+Edit `supabase/seed_devices.sql` first to replace placeholders (`REPLACE_API_KEY_*`).
+Verify:
+```
+supabase db execute --file <(echo 'select id, is_active, (hmac_secret is not null) has_hmac from esp32_devices order by id;')
+```
+
+Once rows exist and devices connect, remove or keep `DEVICE_KEYS_JSON` commented out in `.env` / `backend/.env`.
+
 ## 4. Backend Deployment
 ### Option A: Render / Fly.io / Railway
 - Set environment variables from section 2.
-- Expose PORT (HTTP) and WS_PORT (WebSocket). If only one port allowed, unify by running WS on same Express server (future enhancement).
+- Unified Mode: Leave WS_PORT unset OR set WS_PORT=PORT to have WebSocket attach to the same HTTP server.
+- Dedicated Mode: Set WS_PORT to a different value (default 8083) to run a separate listener.
 - Enable auto-redeploy on GitHub push.
 
 ### Option B: Self-hosted (PM2)
@@ -63,15 +79,11 @@ firebase deploy --only hosting
 Configure `public/` or `dist/` depending on `firebase.json` (already present). Update API base URL in frontend env: create `.env` in project root or use Vite env: `VITE_API_BASE=https://your-backend-domain`.
 
 ## 6. Device Provisioning Flow
-1. Insert row into `esp32_devices`:
-```
-insert into esp32_devices (id, api_key, hmac_secret, is_active) values
-('ESP32_SUMP_002','sump_key','sump_secret', true),
-('ESP32_TOP_002','top_key','top_secret', true);
-```
-2. Copy `esp32/secrets.example.h` → `esp32/secrets.h` and fill keys.
-3. Flash firmware.
-4. Monitor logs (Arduino Serial Monitor) for successful POST 200s.
+1. Edit `supabase/seed_devices.sql` with real keys.
+2. Execute seeding (Section 3.1) or run manual INSERT statements.
+3. Copy `esp32/secrets.example.h` → `esp32/secrets.h` and fill matching keys & HMAC secrets.
+4. Flash firmware (both Top & Sump).
+5. Monitor serial logs for 200 responses and correct timestamps.
 
 ## 7. Enabling Strict HMAC
 After both devices confirmed working with header signatures:
@@ -79,6 +91,15 @@ After both devices confirmed working with header signatures:
 HMAC_REQUIRED=true
 ```
 Redeploy backend. Watch for 401 errors (timestamp drift/time sync issues).
+
+## 7.1 Protocol Version Range
+The backend enforces `protocol_version` (if provided) against an allowed range:
+```
+PROTOCOL_MIN_VERSION (default 1)
+PROTOCOL_MAX_VERSION (default 1)
+```
+Firmware includes `protocol_version` in payloads. If `protocol_version` is missing while `PROTOCOL_MIN_VERSION>1`, requests are rejected (400). Lower versions return HTTP 426 with JSON `{ error:"protocol_version too low", min: <min>, received: <v> }`. Higher future versions return 400 with `{ error:"protocol_version unsupported (future)", max: <max>, received:<v> }`.
+Increase `PROTOCOL_MAX_VERSION` only after backend gains compatibility with the newer firmware schema. Raise `PROTOCOL_MIN_VERSION` when dropping legacy fields.
 
 ## 8. Time Sync (NTP)
 Add in firmware (planned task) before first signed request:
@@ -128,6 +149,9 @@ curl -X POST https://your-backend/api/esp32/system-alert \
 - Merge WS and HTTP on single port.
 - Add JWT-based device onboarding token.
 - Automatic device config push diffing.
+
+## 14. (Optional) CI Failure Notifications
+Add a simple webhook notifier by setting `WEBHOOK_URL` (Slack/Discord/etc.) and extending the GitHub Action to invoke `scripts/notify.js` on failure. Example payload includes repo, commit, and failing job. This helps catch accidental reactivation of `DEVICE_KEYS_JSON` or leaked secrets early.
 
 ---
 End.

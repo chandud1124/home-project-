@@ -29,6 +29,8 @@ interface ESP32Config {
   wifiSSID: string;
   wifiPassword: string;
   serverURL: string;
+  apiKey?: string;
+  hmacSecret?: string;
   pins: ESP32PinConfig;
   tankCapacity: number;
   tankHeight: number;
@@ -916,10 +918,27 @@ void performSafetyChecks(float level, bool floatStatus) {
                 </div>
               </div>
               <div>
-                <p className="text-muted-foreground">Last Seen</p>
-                <p className="font-medium text-xs">
-                  {config.last_seen ? new Date(config.last_seen).toLocaleString() : 'Never'}
-                </p>
+                <p className="text-muted-foreground">API Key</p>
+                <div className="flex items-center gap-2">
+                  <p className="font-medium font-mono text-xs bg-muted px-2 py-1 rounded">
+                    {config.apiKey ? `${config.apiKey.substring(0, 20)}...` : 'Not configured'}
+                  </p>
+                  {config.apiKey && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        navigator.clipboard.writeText(config.apiKey!);
+                        toast({
+                          title: "API Key Copied",
+                          description: "API key has been copied to clipboard",
+                        });
+                      }}
+                    >
+                      📋
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           </Card>
@@ -963,6 +982,36 @@ const ConfigEditor = ({
   onCancel: () => void;
 }) => {
   const [editConfig, setEditConfig] = useState<ESP32Config>(config);
+  const { toast } = useToast();
+
+  const generateApiKey = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 32; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
+  const generateHmacSecret = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+    let result = '';
+    for (let i = 0; i < 64; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
+  // Generate API key and HMAC secret if not present
+  useEffect(() => {
+    if (!editConfig.apiKey) {
+      setEditConfig(prev => ({
+        ...prev,
+        apiKey: generateApiKey(),
+        hmacSecret: generateHmacSecret()
+      }));
+    }
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -1017,6 +1066,43 @@ const ConfigEditor = ({
           value={editConfig.serverURL}
           onChange={(e) => setEditConfig(prev => ({ ...prev, serverURL: e.target.value }))}
         />
+      </div>
+
+      <div className="space-y-2">
+        <Label>API Key (Auto-generated)</Label>
+        <div className="flex gap-2">
+          <Input 
+            value={editConfig.apiKey || ''}
+            readOnly
+            className="font-mono text-sm"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              const newKey = generateApiKey();
+              setEditConfig(prev => ({ ...prev, apiKey: newKey }));
+            }}
+          >
+            🔄
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              navigator.clipboard.writeText(editConfig.apiKey || '');
+              toast({
+                title: "API Key Copied",
+                description: "API key has been copied to clipboard",
+              });
+            }}
+          >
+            📋
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          This API key will be used by your ESP32 to authenticate with the backend. Keep it secure!
+        </p>
       </div>
 
       <div className="space-y-3">

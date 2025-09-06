@@ -38,7 +38,15 @@ serve(async (req) => {
     console.log(`Request: ${req.method} ${path}`)
 
     // Route handling
-    if (pathname.includes('/tanks')) {
+    if (path.includes('/sensor-data')) {
+      return await handleSensorData(supabaseClient, req)
+    } else if (path.includes('/motor-status')) {
+      return await handleMotorStatus(supabaseClient, req)
+    } else if (path.includes('/heartbeat')) {
+      return await handleHeartbeat(supabaseClient, req)
+    } else if (path.includes('/system-alert')) {
+      return await handleSystemAlert(supabaseClient, req)
+    } else if (pathname.includes('/tanks')) {
       return await handleTanks(supabaseClient, req)
     } else if (pathname.includes('/motor-events')) {
       return await handleMotorEvents(supabaseClient, req)
@@ -51,7 +59,7 @@ serve(async (req) => {
     } else if (pathname.includes('/system-status')) {
       return await handleSystemStatus(supabaseClient, req)
     } else {
-      return new Response(JSON.stringify({ message: 'API is working', endpoints: ['/tanks', '/motor-events', '/alerts', '/system-status', '/consumption/daily', '/consumption/monthly'], pathname: pathname }), {
+      return new Response(JSON.stringify({ message: 'API is working', endpoints: ['/sensor-data', '/motor-status', '/heartbeat', '/system-alert', '/tanks', '/motor-events', '/alerts', '/system-status', '/consumption/daily', '/consumption/monthly'], pathname: pathname }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
@@ -262,6 +270,95 @@ async function handleSystemStatus(supabaseClient, req) {
     if (error) throw error
 
     return new Response(JSON.stringify(data[0]), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+
+  return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+    status: 405,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+
+// Handle ESP32 sensor data
+async function handleSensorData(supabaseClient, req) {
+  if (req.method === 'POST') {
+    const body = await req.json()
+    const { data, error } = await supabaseClient
+      .from('tank_readings')
+      .insert([body])
+      .select()
+
+    if (error) throw error
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+
+  return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+    status: 405,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+
+// Handle ESP32 motor status
+async function handleMotorStatus(supabaseClient, req) {
+  if (req.method === 'POST') {
+    const body = await req.json()
+    const { data, error } = await supabaseClient
+      .from('motor_events')
+      .insert([body])
+      .select()
+
+    if (error) throw error
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+
+  return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+    status: 405,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+
+// Handle ESP32 heartbeat
+async function handleHeartbeat(supabaseClient, req) {
+  if (req.method === 'POST') {
+    const body = await req.json()
+    // Update device last seen
+    const { error } = await supabaseClient
+      .from('esp32_devices')
+      .update({ last_seen: new Date().toISOString(), status: 'online' })
+      .eq('id', body.esp32_id)
+
+    if (error) throw error
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+
+  return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+    status: 405,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+
+// Handle ESP32 system alert
+async function handleSystemAlert(supabaseClient, req) {
+  if (req.method === 'POST') {
+    const body = await req.json()
+    const { data, error } = await supabaseClient
+      .from('alerts')
+      .insert([body])
+      .select()
+
+    if (error) throw error
+
+    return new Response(JSON.stringify({ success: true }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }

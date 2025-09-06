@@ -1,0 +1,29 @@
+name: Security & Env Validation
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install deps (root)
+        run: npm ci || npm install
+      - name: Env check
+        run: npm run check:env
+      - name: Backend preflight (no Supabase creds)
+        working-directory: backend
+        run: |
+          npm install --omit=dev || true
+          node preflight.js || echo "(Expected to warn if Supabase vars absent in CI)"
+      - name: Notify on failure
+        if: failure()
+        run: node scripts/notify.js "Security/Env validation failed in ${GITHUB_REPOSITORY}@${GITHUB_SHA}" 

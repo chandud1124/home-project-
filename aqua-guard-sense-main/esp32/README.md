@@ -20,28 +20,59 @@ The ESP32 firmware has been updated to connect to your production Supabase backe
 
 ## 🔧 **BEFORE UPLOADING TO ESP32**
 
-### **1. Update WiFi Credentials**
+### **NEW: Configurable Setup (Recommended)**
+1. **Get API Key from Frontend**:
+   - Open your frontend application
+   - Go to ESP32 Configuration → Add Device
+   - Copy the generated API key
+
+2. **Update esp32_config.h**:
+   ```cpp
+   #define DEVICE_API_KEY "YOUR_API_KEY_FROM_FRONTEND"
+   #define WIFI_SSID "YOUR_WIFI_SSID"
+   #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+   ```
+
+3. **Upload Firmware**:
+   - Open `.ino` file in Arduino IDE
+   - Upload to ESP32
+   - Monitor Serial output
+
+### **Legacy: Manual Configuration**
 Edit the following in your ESP32 code:
 ```cpp
 const char* WIFI_SSID = "YOUR_WIFI_NAME";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* DEVICE_API_KEY = "YOUR_API_KEY_FROM_FRONTEND";
 ```
 
-### **2. Update Device IDs (Optional)**
-```cpp
-const char* DEVICE_ID = "ESP32_TOP_001";    // For top tank
-const char* DEVICE_ID = "ESP32_SUMP_001";  // For sump tank
+## 🆕 **NEW CONFIGURATION SYSTEM**
+
+### **What's Changed**
+- ✅ **No more hardcoded secrets** - Sensitive data not committed
+- ✅ **Frontend API key display** - Keys shown when adding devices
+- ✅ **Individual device authentication** - Each ESP32 has unique credentials
+- ✅ **Easy configuration** - Single `esp32_config.h` file to customize
+
+### **File Structure**
+```
+esp32/
+├── ESP32_SumpTank_Enhanced.ino    # Sump tank firmware
+├── ESP32_TopTank_Monitor.ino      # Top tank firmware
+├── esp32_config.h                 # ⚡ MAIN CONFIG FILE (edit this)
+├── firmware_common.h              # Common definitions
+└── README.md                      # This guide
 ```
 
-### **3. Verify Hardware Connections**
-- AJ-SR04M Ultrasonic Sensor: TRIG → GPIO 5, ECHO → GPIO 18
-- Float Switch: GPIO 4 (sump tank only)
-- Manual Button: GPIO 12 (sump tank only)
-- Motor Relay: GPIO 13 (sump tank only)
-- Buzzer: GPIO 14 (optional)
-- LED: GPIO 15 (optional)
+### **Device Types**
+- **Sump Tank ESP32**: Motor control + level monitoring
+- **Top Tank ESP32**: Level monitoring + motor commands
 
-## 🧪 **TESTING PRODUCTION SETUP**
+### **Security Features**
+- Auto-generated API keys (32 chars)
+- Auto-generated HMAC secrets (64 chars)
+- Individual device authentication
+- Secure key storage in database
 
 ### **1. Upload Firmware**
 1. Open the appropriate `.ino` file in Arduino IDE

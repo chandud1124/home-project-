@@ -408,6 +408,10 @@ bool postToBackend(const String &jsonPayload, const char* path) {
     Serial.println("HTTP: WiFi not connected, cannot POST");
     return false;
   }
+
+  Serial.print("HTTP: Attempting to connect to backend: ");
+  Serial.println(String(BACKEND_HOST) + String(path));
+
   int attempt = 0;
   const int maxAttempts = 2; // primary + optional insecure
   while (attempt < maxAttempts) {
@@ -427,6 +431,9 @@ bool postToBackend(const String &jsonPayload, const char* path) {
     https.setTimeout(8000);
     String scheme = BACKEND_USE_TLS ? "https://" : "http://";
     String url = scheme + String(BACKEND_HOST) + ":" + String(BACKEND_PORT) + String(path);
+    Serial.print("HTTP: Full URL: ");
+    Serial.println(url);
+
     if (!(BACKEND_USE_TLS ? https.begin(client, url) : https.begin(url))) {
       Serial.println("HTTP: Failed to begin HTTPS connection");
       attempt++;
@@ -438,7 +445,11 @@ bool postToBackend(const String &jsonPayload, const char* path) {
     https.addHeader("x-api-key", DEVICE_API_KEY);
     https.addHeader("Accept", "application/json");
 
+    Serial.println("HTTP: Sending POST request...");
     int status = https.POST(jsonPayload);
+    Serial.print("HTTP: Response status: ");
+    Serial.println(status);
+
     if (status <= 0) {
       Serial.print("HTTP: POST failed: ");
       Serial.println(https.errorToString(status));
@@ -456,10 +467,13 @@ bool postToBackend(const String &jsonPayload, const char* path) {
     if (status != 200) {
       Serial.print("HTTP: Non-200 response body: ");
       Serial.println(https.getString());
+    } else {
+      Serial.println("HTTP: Success! Backend connection established.");
     }
     https.end();
     return status == 200;
   }
+  Serial.println("HTTP: All connection attempts failed");
   return false; // should not reach
 }
 
@@ -1140,6 +1154,7 @@ void sendSensorData() {
   // Compute HMAC but send via headers; keep body lean
   String timestamp = String(millis()/1000); // seconds epoch for backend tolerance
   String signature = generateHMACSignature(jsonString, timestamp);
+  Serial.println("DATA: Attempting to send sensor data to backend...");
   if (postToBackendWithAuth(jsonString, FW_PATH_SENSOR_DATA, timestamp, signature)) {
     Serial.println("DATA: (HTTP) Sump sensor data sent - Level: " + String(sumpLevel, 1) + "%, Motor: " + motorStatus);
     logEvent("SENSOR_DATA_SENT", "Sensor data sent successfully with checksum: " + String(checksum) + " and HMAC signature");
@@ -1147,7 +1162,7 @@ void sendSensorData() {
     // Send heartbeat ACK after successful sensor data transmission
     sendHeartbeatAck();
   } else {
-    Serial.println("DATA: (HTTP) Failed to send sump sensor data");
+    Serial.println("DATA: (HTTP) Failed to send sump sensor data - Backend connection issue");
     logEvent("SENSOR_DATA_FAILED", "Failed to send sensor data");
     enqueueMessage(jsonString);
   }

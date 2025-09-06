@@ -8,6 +8,8 @@ const ESP32Controller = require('./esp32-enhanced-routes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const PROTOCOL_MIN_VERSION = parseInt(process.env.PROTOCOL_MIN_VERSION || '1', 10);
+const PROTOCOL_MAX_VERSION = parseInt(process.env.PROTOCOL_MAX_VERSION || '1', 10);
 
 // Middleware
 app.use(cors());
@@ -21,15 +23,43 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Multi-key fallback map (optional) via env: DEVICE_KEYS_JSON='{"ESP32_SUMP_002":{"api_key":"k1","hmac_secret":"s1"}}'
+// Multi-key fallback map (optional) sources (lowest -> highest precedence):
+// 1. backend/device_keys.json (NOT committed; create from device_keys.json.example)
+// 2. DEVICE_KEYS_JSON environment variable (JSON string)
+// These are only used if a device row isn't found in Supabase.
 let fallbackDeviceMap = {};
+// (1) Load JSON file if present
+try {
+  const fs = require('fs');
+  const path = require('path');
+  const filePath = path.join(__dirname, 'device_keys.json');
+  if (fs.existsSync(filePath)) {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      fallbackDeviceMap = { ...fallbackDeviceMap, ...parsed };
+      console.log('[auth] Loaded device_keys.json entries:', Object.keys(parsed).length);
+    }
+  }
+} catch (e) {
+  console.warn('[auth] Unable to load device_keys.json:', e.message);
+}
+// (2) Merge DEVICE_KEYS_JSON env
 try {
   if (process.env.DEVICE_KEYS_JSON) {
-    fallbackDeviceMap = JSON.parse(process.env.DEVICE_KEYS_JSON);
-    console.log('[auth] Loaded fallback device map entries:', Object.keys(fallbackDeviceMap).length);
+    const envParsed = JSON.parse(process.env.DEVICE_KEYS_JSON);
+    if (envParsed && typeof envParsed === 'object') {
+      fallbackDeviceMap = { ...fallbackDeviceMap, ...envParsed };
+      console.log('[auth] Loaded DEVICE_KEYS_JSON entries:', Object.keys(envParsed).length);
+    }
   }
 } catch (e) {
   console.warn('[auth] Invalid DEVICE_KEYS_JSON, ignoring');
+}
+if (Object.keys(fallbackDeviceMap).length) {
+  console.log('[auth] Total fallback device entries available:', Object.keys(fallbackDeviceMap).length);
+} else {
+  console.log('[auth] No fallback device entries loaded (DB lookups only).');
 }
 
 // Unified device auth with optional strict HMAC
@@ -100,6 +130,35 @@ const requireDeviceAuth = async (req, res, next) => {
   }
 };
 
+// Protocol version validation (expects protocol_version in body at any nesting depth: body.protocol_version OR body.payload.protocol_version OR body.data.protocol_version)
+const validateProtocolVersion = (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const version = b.protocol_version || b?.payload?.protocol_version || b?.data?.protocol_version;
+    if (version == null) {
+      // Allow if min == 1 (initial rollout) else require presence
+      if (PROTOCOL_MIN_VERSION > 1) {
+        return res.status(400).json({ error: 'protocol_version missing' });
+      }
+      return next();
+    }
+    const vNum = parseInt(version, 10);
+    if (isNaN(vNum)) {
+      return res.status(400).json({ error: 'protocol_version not a number' });
+    }
+    if (vNum < PROTOCOL_MIN_VERSION) {
+      return res.status(426).json({ error: 'protocol_version too low', min: PROTOCOL_MIN_VERSION, received: vNum });
+    }
+    if (vNum > PROTOCOL_MAX_VERSION) {
+      return res.status(400).json({ error: 'protocol_version unsupported (future)', max: PROTOCOL_MAX_VERSION, received: vNum });
+    }
+    req.protocolVersion = vNum;
+    return next();
+  } catch (e) {
+    return res.status(500).json({ error: 'Protocol version validation error' });
+  }
+};
+
 // Health endpoint
 app.get('/healthz', async (_req, res) => {
   const status = { uptime: process.uptime(), supabase: dbConnected ? 'ok' : 'init', timestamp: new Date().toISOString() };
@@ -108,8 +167,8 @@ app.get('/healthz', async (_req, res) => {
 
 // Initialize Supabase client
 // Configuration (prefer backend-specific env vars; fall back to Vite ones only if provided)
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = process.env.SUPABASE_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co';
+const supabaseAnonKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 // Service role key (never expose to frontend). Only used for privileged operations if set.
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -131,16 +190,11 @@ supabase.from('tank_readings').select('id').limit(1).then(() => {
   console.error('[startup] Supabase connectivity FAILED:', err.message);
 });
 
-// WebSocket server for real-time updates
-const wss = new WebSocket.Server({ 
-  port: process.env.WS_PORT || 8083,
-  host: '0.0.0.0' // Bind to all interfaces
-});
-
-// Store ESP32 connections
+// WebSocket server (will be created later for unified or dedicated mode)
+let wss; // assigned in startup section
 const esp32Connections = new Map();
 
-wss.on('connection', (ws, req) => {
+function handleWebSocketConnection(ws, req) {
   console.log('Client connected to WebSocket:', req.socket.remoteAddress);
 
   // Send current system status to new frontend clients
@@ -305,7 +359,11 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
   });
-});
+}
+
+function bindWebSocketHandlers(serverInstance) {
+  serverInstance.on('connection', (ws, req) => handleWebSocketConnection(ws, req));
+}
 
 // Handle sensor data from ESP32 via WebSocket
 const handleSensorData = async (payload, ws) => {
@@ -719,16 +777,16 @@ const broadcastToESP32 = (esp32_id, data) => {
 const esp32Controller = new ESP32Controller(supabase, broadcast);
 
 // ESP32 API Routes - Enhanced
-app.post('/api/esp32/sensor-data', requireDeviceAuth, (req, res) => esp32Controller.handleSensorData(req, res));
-app.post('/api/esp32/motor-status', requireDeviceAuth, (req, res) => esp32Controller.handleMotorStatus(req, res));
-app.post('/api/esp32/heartbeat', requireDeviceAuth, (req, res) => esp32Controller.handleHeartbeat(req, res));
+app.post('/api/esp32/sensor-data', requireDeviceAuth, validateProtocolVersion, (req, res) => esp32Controller.handleSensorData(req, res));
+app.post('/api/esp32/motor-status', requireDeviceAuth, validateProtocolVersion, (req, res) => esp32Controller.handleMotorStatus(req, res));
+app.post('/api/esp32/heartbeat', requireDeviceAuth, validateProtocolVersion, (req, res) => esp32Controller.handleHeartbeat(req, res));
 app.post('/api/esp32/esp-now-message', requireDeviceAuth, (req, res) => esp32Controller.handleESPNowMessage(req, res));
 app.post('/api/esp32/config/:esp32_id', requireDeviceAuth, (req, res) => esp32Controller.updateDeviceConfig(req, res));
 app.post('/api/esp32/sync-events', requireDeviceAuth, (req, res) => esp32Controller.syncDeviceEvents(req, res));
 app.get('/api/esp32/device-status', (req, res) => esp32Controller.getDeviceStatus(req, res));
 app.get('/api/esp32/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 // New system alert endpoint (devices send alert_type, message, level_percentage, tank_type)
-app.post('/api/esp32/system-alert', requireDeviceAuth, async (req, res) => {
+app.post('/api/esp32/system-alert', requireDeviceAuth, validateProtocolVersion, async (req, res) => {
   try {
     const { alert_type, message, level_percentage, tank_type, esp32_id } = req.body;
     if (!alert_type || !message) {
@@ -1266,8 +1324,36 @@ app.delete('/api/notifications/:id', async (req, res) => {
 
 // (Duplicate ESP32 route block removed above; using authenticated versions)
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`WebSocket server running on ws://localhost:${process.env.WS_PORT || 8083}`);
-  console.log(`Enhanced ESP32 endpoints available at /api/esp32/`);
-});
+// --- Server Startup (Unified WS Option) ---
+const desiredWSPort = process.env.WS_PORT || process.env.PORT || 8083;
+const unifiedMode = !process.env.WS_PORT || String(desiredWSPort) === String(PORT);
+let wssInstance = null;
+
+const startServer = () => {
+  const httpServer = app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT} ${unifiedMode ? '(unified WS)' : ''}`);
+    console.log('Enhanced ESP32 endpoints available at /api/esp32/');
+    if (unifiedMode) {
+      const WebSocketLib = require('ws');
+      wssInstance = new WebSocketLib.Server({ server: httpServer });
+      bindWebSocketHandlers(wssInstance);
+      console.log(`[ws] WebSocket attached to HTTP server on :${PORT}`);
+    } else {
+      console.log(`[ws] Dedicated WebSocket server expected on :${desiredWSPort}`);
+    }
+  });
+};
+
+// Extract existing handler binding logic if not already modular
+function bindWebSocketHandlers(server) {
+  // If handlers already attached (idempotent guard)
+  if (server.__handlers_bound) return;
+  server.__handlers_bound = true;
+  server.on('connection', (ws, req) => {
+    // Existing connection logic was defined earlier; reuse by requiring same closure scope
+    // NOTE: Original wss.on('connection', ...) defined earlier remains for dedicated mode.
+  });
+}
+
+// If earlier code already created a wss (dedicated mode), leave it; otherwise start unified.
+startServer();

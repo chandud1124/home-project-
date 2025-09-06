@@ -1,0 +1,12 @@
+{
+  "ESP32_SUMP_002": {
+    "api_key": "1eac6c384a31963af1315f9ead2109a13abee486e9a9b0d080d2de862ae7a545",
+    "hmac_secret": "c2858fe0513830bfe988a46e8162d9ef6fec933758156a901a41012afde8bb5b7fa1cee9e677cbe72aa0e84a4b4c72aabf8f33ad1d989ba4b69ca9e1b1e1e0c2",
+    "device_type": "sump_tank"
+  },
+  "ESP32_TOP_001": {
+    "api_key": "2757f966917771ed05a290c800e61e62c5f1d839e4d01a53bd58fb07e0aa0f4c",
+    "hmac_secret": "34ea4f0adc7230475316d06203e8dd77655fd3d41429c6fe457ba86b314b809dbc289e37f6f0efd3702d01f5543c705606a48befa2542876c9ad6657e45566b3",
+    "device_type": "top_tank"
+  }
+}

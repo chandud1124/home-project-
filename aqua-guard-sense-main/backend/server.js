@@ -13,19 +13,122 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(bodyParser.json());
 
+// Basic request logging (lightweight)
+app.use((req, _res, next) => {
+  if (process.env.LOG_LEVEL !== 'silent') {
+    console.log(`[req] ${req.method} ${req.url}`);
+  }
+  next();
+});
+
+// Multi-key fallback map (optional) via env: DEVICE_KEYS_JSON='{"ESP32_SUMP_002":{"api_key":"k1","hmac_secret":"s1"}}'
+let fallbackDeviceMap = {};
+try {
+  if (process.env.DEVICE_KEYS_JSON) {
+    fallbackDeviceMap = JSON.parse(process.env.DEVICE_KEYS_JSON);
+    console.log('[auth] Loaded fallback device map entries:', Object.keys(fallbackDeviceMap).length);
+  }
+} catch (e) {
+  console.warn('[auth] Invalid DEVICE_KEYS_JSON, ignoring');
+}
+
+// Unified device auth with optional strict HMAC
+const requireDeviceAuth = async (req, res, next) => {
+  const crypto = require('crypto');
+  const deviceId = req.header('x-device-id');
+  const apiKey = req.header('x-api-key');
+  const signature = req.header('x-signature');
+  const ts = req.header('x-timestamp');
+  const hmacRequired = (process.env.HMAC_REQUIRED || process.env.DEVICE_HMAC_REQUIRED || 'false').toLowerCase() === 'true';
+  if (!deviceId || !apiKey) {
+    return res.status(401).json({ error: 'Missing device auth headers' });
+  }
+  try {
+    let device = null;
+    // Prefer primary devices table name 'esp32_devices' then legacy 'devices'
+    let query = await supabase
+      .from('esp32_devices')
+      .select('id, api_key, hmac_secret, is_active')
+      .eq('id', deviceId)
+      .limit(1);
+    if (query.error) {
+      // fallback to legacy table
+      query = await supabase
+        .from('devices')
+        .select('device_id, api_key, hmac_secret, is_active')
+        .eq('device_id', deviceId)
+        .limit(1);
+      if (!query.error && query.data && query.data.length > 0) {
+        const d = query.data[0];
+        device = { id: d.device_id, api_key: d.api_key, hmac_secret: d.hmac_secret, is_active: d.is_active !== false };
+      }
+    }
+    if (!device && !query.error && query.data && query.data.length > 0) {
+      const d = query.data[0];
+      device = { id: d.id, api_key: d.api_key, hmac_secret: d.hmac_secret, is_active: d.is_active !== false };
+    }
+    if (!device && fallbackDeviceMap[deviceId]) {
+      device = { id: deviceId, api_key: fallbackDeviceMap[deviceId].api_key, hmac_secret: fallbackDeviceMap[deviceId].hmac_secret, is_active: true };
+    }
+    if (!device || device.api_key !== apiKey || device.is_active === false) {
+      return res.status(401).json({ error: 'Invalid device credentials' });
+    }
+    if (hmacRequired) {
+      if (!signature || !ts) {
+        return res.status(401).json({ error: 'Missing signature/timestamp' });
+      }
+      const driftSec = parseInt(process.env.HMAC_TIME_DRIFT_SECONDS || '300', 10);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const tsSec = parseInt(ts, 10);
+      if (isNaN(tsSec) || Math.abs(nowSec - tsSec) > driftSec) {
+        return res.status(401).json({ error: 'Timestamp drift too large' });
+      }
+      if (!device.hmac_secret) {
+        return res.status(401).json({ error: 'HMAC required but device secret missing' });
+      }
+      const rawBody = JSON.stringify(req.body || {});
+      const expected = crypto.createHmac('sha256', device.hmac_secret).update(deviceId + rawBody + ts).digest('hex');
+      if (expected !== String(signature).toLowerCase()) {
+        return res.status(401).json({ error: 'Invalid signature' });
+      }
+    }
+    req.device = { id: deviceId };
+    next();
+  } catch (err) {
+    console.error('[auth] error', err);
+    return res.status(500).json({ error: 'Auth middleware error' });
+  }
+};
+
+// Health endpoint
+app.get('/healthz', async (_req, res) => {
+  const status = { uptime: process.uptime(), supabase: dbConnected ? 'ok' : 'init', timestamp: new Date().toISOString() };
+  res.json(status);
+});
+
 // Initialize Supabase client
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://dwcouaacpqipvvsxiygo.supabase.co';
-const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4';
+// Configuration (prefer backend-specific env vars; fall back to Vite ones only if provided)
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+// Service role key (never expose to frontend). Only used for privileged operations if set.
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Fatal: Supabase configuration missing. Set SUPABASE_URL and SUPABASE_ANON_KEY.');
+  process.exit(1);
+}
+
+const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 let dbConnected = false;
 
-// Test Supabase connection
-supabase.from('test').select('*').limit(1).then(() => {
+// Test Supabase connectivity using a lightweight meta-query (tank_readings limited)
+supabase.from('tank_readings').select('id').limit(1).then(() => {
   dbConnected = true;
-  console.log('Connected to Supabase');
+  console.log('[startup] Supabase connectivity OK');
 }).catch(err => {
-  console.error('Failed to connect to Supabase:', err);
+  console.error('[startup] Supabase connectivity FAILED:', err.message);
 });
 
 // WebSocket server for real-time updates
@@ -616,13 +719,60 @@ const broadcastToESP32 = (esp32_id, data) => {
 const esp32Controller = new ESP32Controller(supabase, broadcast);
 
 // ESP32 API Routes - Enhanced
-app.post('/api/esp32/sensor-data', (req, res) => esp32Controller.handleSensorData(req, res));
-app.post('/api/esp32/motor-status', (req, res) => esp32Controller.handleMotorStatus(req, res));
-app.post('/api/esp32/heartbeat', (req, res) => esp32Controller.handleHeartbeat(req, res));
-app.post('/api/esp32/esp-now-message', (req, res) => esp32Controller.handleESPNowMessage(req, res));
-app.post('/api/esp32/config/:esp32_id', (req, res) => esp32Controller.updateDeviceConfig(req, res));
-app.post('/api/esp32/sync-events', (req, res) => esp32Controller.syncDeviceEvents(req, res));
+app.post('/api/esp32/sensor-data', requireDeviceAuth, (req, res) => esp32Controller.handleSensorData(req, res));
+app.post('/api/esp32/motor-status', requireDeviceAuth, (req, res) => esp32Controller.handleMotorStatus(req, res));
+app.post('/api/esp32/heartbeat', requireDeviceAuth, (req, res) => esp32Controller.handleHeartbeat(req, res));
+app.post('/api/esp32/esp-now-message', requireDeviceAuth, (req, res) => esp32Controller.handleESPNowMessage(req, res));
+app.post('/api/esp32/config/:esp32_id', requireDeviceAuth, (req, res) => esp32Controller.updateDeviceConfig(req, res));
+app.post('/api/esp32/sync-events', requireDeviceAuth, (req, res) => esp32Controller.syncDeviceEvents(req, res));
 app.get('/api/esp32/device-status', (req, res) => esp32Controller.getDeviceStatus(req, res));
+app.get('/api/esp32/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+// New system alert endpoint (devices send alert_type, message, level_percentage, tank_type)
+app.post('/api/esp32/system-alert', requireDeviceAuth, async (req, res) => {
+  try {
+    const { alert_type, message, level_percentage, tank_type, esp32_id } = req.body;
+    if (!alert_type || !message) {
+      return res.status(400).json({ error: 'Missing alert_type or message' });
+    }
+    const alertRecord = {
+      tank_type: tank_type || 'unknown',
+      esp32_id: esp32_id || req.device.id,
+      alert_type,
+      message,
+      level_percentage: level_percentage ?? null,
+      timestamp: new Date().toISOString(),
+      acknowledged: false
+    };
+    const { error } = await supabase.from('alerts').insert(alertRecord);
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    broadcast({ type: 'system_alert', data: alertRecord });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to store alert' });
+  }
+});
+
+// Compatibility single ingest endpoint (for legacy firmware expecting unified function)
+app.post('/api/esp32/ingest', requireDeviceAuth, async (req, res) => {
+  const { type, data, payload } = req.body || {};
+  const body = data || payload || req.body;
+  try {
+    switch (type) {
+      case 'sensor_data':
+        return esp32Controller.handleSensorData({ body }, res);
+      case 'heartbeat':
+        return esp32Controller.handleHeartbeat({ body }, res);
+      case 'motor_status':
+        return esp32Controller.handleMotorStatus({ body }, res);
+      default:
+        return res.status(400).json({ error: 'Unknown ingest type' });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: 'Ingest failed' });
+  }
+});
 
 // ESP32 Device Configuration Routes
 app.post('/api/esp32/devices', async (req, res) => {
@@ -1114,13 +1264,7 @@ app.delete('/api/notifications/:id', async (req, res) => {
   }
 });
 
-// Enhanced ESP32 routes
-app.post('/api/esp32/sensor-data', (req, res) => esp32Controller.handleSensorData(req, res));
-app.post('/api/esp32/heartbeat', (req, res) => esp32Controller.handleHeartbeat(req, res));
-app.post('/api/esp32/esp-now-message', (req, res) => esp32Controller.handleESPNowMessage(req, res));
-app.post('/api/esp32/config/:esp32_id', (req, res) => esp32Controller.updateDeviceConfig(req, res));
-app.post('/api/esp32/sync-events', (req, res) => esp32Controller.syncDeviceEvents(req, res));
-app.get('/api/esp32/device-status', (req, res) => esp32Controller.getDeviceStatus(req, res));
+// (Duplicate ESP32 route block removed above; using authenticated versions)
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

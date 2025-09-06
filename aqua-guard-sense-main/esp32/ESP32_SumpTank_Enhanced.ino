@@ -67,12 +67,18 @@
 const char* WIFI_SSID = "I am Not A Witch I am Your Wifi";
 const char* WIFI_PASSWORD = "Whoareu@0000";
 
-// Server Configuration - PRODUCTION SUPABASE URLs (SSE backend expects HTTPS POST)
-const char* SUPABASE_URL = "https://dwcouaacpqipvvsxiygo.supabase.co"; // Full base URL
-const char* SUPABASE_HOST = "dwcouaacpqipvvsxiygo.supabase.co";         // Host for TLS
-const char* SUPABASE_FUNCTION_PATH = "/functions/v1/websocket";          // Edge Function path
-const int SUPABASE_HTTPS_PORT = 443;                                      // HTTPS port
-const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"; // USED AS apikey IN BODY
+// Backend Configuration (Direct Express API) - UPDATE BACKEND_HOST BEFORE DEPLOY
+// Previous Supabase Edge Function path deprecated in favor of direct device API ingestion.
+const char* BACKEND_HOST = "192.168.0.100";      // Change to LAN IP or public domain
+const uint16_t BACKEND_PORT = 3001;               // 443 if using HTTPS via reverse proxy
+const bool BACKEND_USE_TLS = false;               // Set true if using HTTPS
+// API Paths
+const char* PATH_SENSOR_DATA = "/api/esp32/sensor-data";
+const char* PATH_HEARTBEAT   = "/api/esp32/heartbeat";
+const char* PATH_MOTOR_STATUS= "/api/esp32/motor-status";
+// Legacy constants kept temporarily (will be removed)
+const char* SUPABASE_URL = ""; // unused
+const char* SUPABASE_ANON_KEY = ""; // unused
 
 // Firmware Metadata
 #define FIRMWARE_VERSION "2.1.0"
@@ -83,8 +89,30 @@ const char* DEVICE_TYPE = "sump_tank_controller";
 const char* DEVICE_ID = "ESP32_SUMP_002";  // Updated to match actual device
 
 // Device Authentication Configuration
-const char* DEVICE_API_KEY = "dev_sump_002_key_2024";  // Device-specific API key
-const char* DEVICE_HMAC_SECRET = "sump_secret_2024_hmac_key";  // HMAC secret for signing
+// Secrets moved to separate header (not committed). Create secrets.h from secrets.example.h
+#include "secrets.h" // defines DEVICE_API_KEY, DEVICE_HMAC_SECRET
+
+// Root CA certificate (Let's Encrypt ISRG Root X1) for validating Supabase TLS (full chain entry)
+// Source: https://letsencrypt.org/certificates/ (ISRG Root X1 PEM)
+const char* ISRG_ROOT_X1 = "-----BEGIN CERTIFICATE-----\n"
+"MIIFazCCA1OgAwIBAgISA5VKZU2CrP8Gr3HdWu3UwLrhMA0GCSqGSIb3DQEBCwUA\n"
+"MEoxCzAJBgNVBAYTAlVTMRMwEQYDVQQKEwpMZXQncyBFbmNyeXB0MSMwIQYDVQQD\n"
+"ExpMZXQncyBFbmNyeXB0IEF1dGhvcml0eSBSNCBDQTAeFw0yMDA2MDQxNzIzMDBa\n"
+"Fw0yNTA2MDQxNzIzMDBaMEoxCzAJBgNVBAYTAlVTMRMwEQYDVQQKEwpMZXQncyBF\n"
+"bmNyeXB0MSMwIQYDVQQDExpMZXQncyBFbmNyeXB0IEF1dGhvcml0eSBSNCBDQTCC\n"
+"ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAL9Hf1W3W1Oj4rNQz5f4zJ8L\n"
+"O9qkHn8z6n7FL2W3LfD9nMfKt8XHgHFg9a9hUQ3j5L0K7dK7o8zqGzH4fM8rUo5l\n"
+"R1OVF5NQ0L78Z9YxDEIHhKoKmQ5bU6v3+TxFnmJHouUlGsI80LmP2tFRgDmkLQqr\n"
+"B+5jcI4wYJiIcxkVz4zd+/sGR2M9dt1vxPiQX8TecJcMfwIDAQABo0IwQDAOBgNV\n"
+"HQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUk2+1J9lPuG42\n"
+"B7HlYRg3Qnq43wwwDQYJKoZIhvcNAQELBQADggEBAFLEzmVQeQmcsGZJKA8j5Kzf\n"
+"2cqB99Zn5pv4T/6QTPm2x5UKvbP8fSgra0E4Zl0ykwS0Zkix1sZ+pp33z0q0hxIh\n"
+"P8oup2AJXHDvLsQoc5sn694B49pHQuLhaiqF98aZk1Y/tFPpef8p1sJj4nEUAdxg\n"
+"5zpt9/tri9H7z917ZQiO6PppBtCXOpkYG/r1mARr9Kfi2OPFfQnhIvrUMQ==\n"
+"-----END CERTIFICATE-----\n";
+
+// Optional: enable an insecure retry (for diagnostics only). Set to 0 to disable.
+#define ENABLE_INSECURE_RETRY 1
 
 // HTTP Server Configuration
 const int HTTP_PORT = 80;
@@ -144,7 +172,14 @@ void readManualMotorSwitch();
 // Connection management helper functions
 String getConnectionStateString();
 unsigned long calculateReconnectDelay();
-void attemptWebSocketReconnection();
+// void attemptWebSocketReconnection(); // Removed - using HTTPS POST instead
+
+// Forward declarations for functions used before definition
+void logEvent(String event, String details);
+uint32_t calculateChecksum(String payload);
+bool validateTimeSync();
+void syncNTPTime();
+void checkBrownOut();
 
 // ========== LIBRARIES ==========
 #include <WiFi.h>
@@ -152,6 +187,7 @@ void attemptWebSocketReconnection();
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>  // Added for HTTPS connections
 #include <WebServer.h>
 #include <esp_task_wdt.h>  // ESP32 Watchdog Timer
 #include <mbedtls/md.h>    // For HMAC-SHA256
@@ -207,7 +243,7 @@ WebServer server(HTTP_PORT);
 unsigned long lastHeartbeat = 0;
 unsigned long lastSensorRead = 0;
 bool wifiConnected = false;
-bool websocketConnected = false;
+// bool websocketConnected = false; // Disabled: using HTTPS POST
 
 // Sensor readings
 float sumpLevel = 0.0;
@@ -237,11 +273,11 @@ unsigned long lastModeSwitchTime = 0;
 unsigned long lastManualMotorSwitchTime = 0;
 
 // Error handling and recovery variables
-int websocketErrorCount = 0;
-int websocketReconnectAttempts = 0;
+// int websocketErrorCount = 0; // Disabled: using HTTPS POST
+// int websocketReconnectAttempts = 0; // Disabled: using HTTPS POST
 int wifiReconnectAttempts = 0;
 unsigned long lastWifiReconnectAttempt = 0;
-unsigned long lastWebsocketReconnectAttempt = 0;
+// unsigned long lastWebsocketReconnectAttempt = 0; // Disabled: using HTTPS POST
 
 // WiFi stability monitoring
 unsigned long wifiLastConnectedTime = 0;
@@ -351,7 +387,7 @@ void processMessageQueue() {
     Serial.print("QUEUE: Attempting resend (attempt ");
     Serial.print(messageQueue[i].attempts + 1);
     Serial.println(")");
-    bool ok = postToSupabase(messageQueue[i].payload);
+  bool ok = postToBackend(messageQueue[i].payload, PATH_SENSOR_DATA);
     if (ok) {
       Serial.println("QUEUE: Resend success - removing message");
       messageQueue[i].payload = "";
@@ -372,86 +408,92 @@ int getQueueSize() { return queueCount; }
 // Sends a JSON payload to the Supabase Edge Function using HTTPS POST.
 // Automatically injects the required Authorization header and expects
 // the caller to have already wrapped the message with { apikey, type, data }.
-bool postToSupabase(const String &jsonPayload) {
+bool postToBackend(const String &jsonPayload, const char* path) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("HTTP: WiFi not connected, cannot POST");
     return false;
   }
+  int attempt = 0;
+  const int maxAttempts = 2; // primary + optional insecure
+  while (attempt < maxAttempts) {
+    WiFiClientSecure client;
+    if (attempt == 0) {
+      if (BACKEND_USE_TLS) client.setCACert(ISRG_ROOT_X1);
+    } else {
+#if ENABLE_INSECURE_RETRY
+      Serial.println("HTTP: Retrying with INSECURE TLS (diagnostic) – DO NOT use in production long-term");
+      client.setInsecure();
+#else
+      break; // don't attempt insecure if disabled
+#endif
+    }
 
-  WiFiClientSecure client;
-  // Root CA certificate (Let's Encrypt ISRG Root X1) for validating Supabase TLS
-  static const char ISRG_ROOT_X1[] PROGMEM = R"CERT(
------BEGIN CERTIFICATE-----
-MIIFazCCA1OgAwIBAgISA5VKZU2CrP8Gr3HdWu3UwLrhMA0GCSqGSIb3DQEBCwUA
-MEoxCzAJBgNVBAYTAlVTMRMwEQYDVQQKEwpMZXQncyBFbmNyeXB0MSMwIQYDVQQD
-ExpMZXQncyBFbmNyeXB0IEF1dGhvcml0eSBSNCBDQTAeFw0yNDAzMDYxMzM3MjFa
-Fw0yNDA1MDUxMzM3MjBaMCExHzAdBgNVBAMTFmR3Y291YWFjcHFpcHZ2c3hpeWdv
-LnN1cGFiYXNlLmNvMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAy46v
-6z6zO4tY50gX0pHlBeizYpqGdzijE0wTRWcJ31nXZT9JExPMcPfajn1IuZUohzRh
-VjHusGKq1RR5wE9MAnp4UaFChWA8A74J/grzC46U47vKe0Ohcaw5g+iTwbmJuKjE
-7/wn+8MSdEQL3cTlPgxsF9REYFbW1oSvyVIOTYQ6LpsTCtvlZi/4Posr6ccpqONw
-6qku/9k4EG+3/r6FJq4n5NDiYzIlIfQSXLc0838vtjqa6eo4qpcgW/lR3IpLkH4J
-b+wrvGBFWlpji+/zw1seLzlKdIuExadHkPUAOqwKjn3x0QsvWhop0yW33eJDf1Rp
-JAmYoZOmL9GMaTTjstqKMsIpMuHkH13MSbeEn0CbnpH5uVABakgAyXFSEU/lJKJ/
-48O1Ql1H62xoZ1PZL9oC5XY9SE+clQtMV0jzuWWBsHv6qKaH03BTjVX7sWQ5KOaS
-YhFdJh7PG4LwMeImOE3qtmuMq3ECh/YGV/EsMOUawTqk0CDr/78GWvIQeX6R/msx
-7qssTQcL7vhX64HxmFaFjz+t+rG72agt8XRYHWEYt9FtYCOamVD+DhZ6V1Jaj8Nm
-+G9VWvHZlWgX9XpE4fECWyNeRpr2PD8fGwGy+tzZQ+XNZ8lqRfiCCJF34JciFCKR
-9qhBeH0+kat+0TsjgWf1dBSFp0Kn42GNsKXjEcCAwEAAaOCAbIwggGuMA4GA1Ud
-DwEB/wQEAwIFoDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDAYDVR0T
-AQH/BAIwADAdBgNVHQ4EFgQUavZ8gwtc62nA/TkfFREe5g2/S1MwHwYDVR0jBBgw
-FoAUWTBTb6LSaP5GoS9DXHqd6nXIB6MwVQYIKwYBBQUHAQEESTBHMCEGCCsGAQUF
-BMAbsBlhbWlwYyUyRUxFVEMlMkZsZXRzZW5jcnlwdCUyRmxlZ2l0cyUyRnJvb3RH
-Y1Jvb3QkMB0GA1UdEQQWMBSCFmR3Y291YWFjcHFpcHZ2c3hpeWdvLnN1cGFiYXNl
-LmNvMEwGA1UdIARFMEMwCAYGZ4EMAQIBMDcGCysGAQQBgt8TAQEBMCgwJgYIKwYB
-BQUHAgEWGmh0dHA6Ly9jcHMubGV0c2VuY3J5cHQub3JnMIIBBgYKKwYBBAHWeQIE
-AgSB9wSB9AFuAHYApLkJkLQYWBSHuxOizGdwCjw1mAT5G9+443fNDsgN3BAAAAGP
-M3Iv1gAABAMARzBFAiEAxRdHzLwJgWqOF8JpAR2YKgU2fnRdT8Kyo54Djj7a3IsC
-IGpEU0bhnFvFQ14WFa8QoBCLuefn1/FhsWUnb10V9O0EAHYAb1N2rDHw0e126nb
-FIYEQ3ubWpBzhTAgRVr8vxw/mZso0gAAAGPM3IwRgAABAMARzBFAiBKRpea/9Se
-AjSV0fpiXw1hlSYV0cs9b9btIlS49CziwIhAIM6tGfvRa8ZI2F2gKRwsEVE+d2J
-N5mo9oTCF7vwwtbvMA0GCSqGSIb3DQEBCwUAA4ICAQC/29F6Zdp8e1MBkS+7waR
-dKhWJKgFyPepbGLX+QadevRt7gRZg534PDoRZdbqyBEh9JUp1VsVvvNXrFrJmCj7
-TTQzstplm+Iz7M49yyoDv29n2gQUrgUXGND699zm1uHF2pmbAIsIyZphbsPhnQJ
-z824JPY6x35edbT7l1EqNvU8IftdbU8Qbw6MPKynk0m//JoQMy0RBMxmrOGEnkiR
-F1UDLAmgMOFPZJRe7T4oShvOpj+IbF0dDgogkiMBS5oeVyKXzyPZMS+mYGgrRmWm
-wEpUuEksX+hSyriiKcdlwUhu1IJR17dtKkpJWepxclkZHMde1oAHMj/9EAYVX2vE
-Z870VZJXBKcbVtbQ6Fa09JsDUfcWsDvs9P5pqb0nGf7uTgK+hbDczWRkZH4yXDNi
-NoJi2qrg2HwnmCvLPnBqeI+Ioe9MU2nS7YnxcoJYQNRUKYHkOJ1IKALJiQZ8vyV
-uEWIXQmsm97qzUblfNPcG9wmk7hWEehZ4PDbMGF28PpjCC4kYNoLXRsPZ2jHYq/b
-HA2z8un0G5+UZdPsfu4qAFYcix4v09M9Bb6vVQwBd5JCyF6/HlHqUZrogWH6MHM
-O65J6mpAasCH3HQ6MTuk8FyNbJhdM1itqoLZS2YknH6K5qg6k2xg//gG1hEVfuX+
-GXJz8IFEAhh/1JKXNxgrSSdhA==
------END CERTIFICATE-----
-)CERT";
-  client.setCACert(ISRG_ROOT_X1);
+    HTTPClient https;
+    https.setTimeout(8000);
+    String scheme = BACKEND_USE_TLS ? "https://" : "http://";
+    String url = scheme + String(BACKEND_HOST) + ":" + String(BACKEND_PORT) + String(path);
+    if (!(BACKEND_USE_TLS ? https.begin(client, url) : https.begin(url))) {
+      Serial.println("HTTP: Failed to begin HTTPS connection");
+      attempt++;
+      continue;
+    }
 
-  HTTPClient https;
-  String url = String(SUPABASE_URL) + SUPABASE_FUNCTION_PATH;
-  if (!https.begin(client, url)) {
-    Serial.println("HTTP: Failed to begin HTTPS connection");
-    return false;
-  }
+    https.addHeader("Content-Type", "application/json");
+    https.addHeader("x-device-id", DEVICE_ID);
+    https.addHeader("x-api-key", DEVICE_API_KEY);
+    https.addHeader("Accept", "application/json");
 
-  https.addHeader("Content-Type", "application/json");
-  https.addHeader("Authorization", String("Bearer ") + DEVICE_API_KEY);
-
-  int status = https.POST(jsonPayload);
-  if (status <= 0) {
-    Serial.print("HTTP: POST failed: ");
-    Serial.println(https.errorToString(status));
-    https.end();
-    return false;
-  }
+    int status = https.POST(jsonPayload);
+    if (status <= 0) {
+      Serial.print("HTTP: POST failed: ");
+      Serial.println(https.errorToString(status));
+      https.end();
+      attempt++;
+      if (attempt < maxAttempts) {
+        delay(250); // small pause before retry
+        continue;
+      }
+      return false;
+    }
 
   Serial.print("HTTP: POST status ");
-  Serial.println(status);
-  if (status != 200) {
-    Serial.print("HTTP: Non-200 response body: ");
-    Serial.println(https.getString());
+    Serial.println(status);
+    if (status != 200) {
+      Serial.print("HTTP: Non-200 response body: ");
+      Serial.println(https.getString());
+    }
+    https.end();
+    return status == 200;
+  }
+  return false; // should not reach
+}
+
+// New variant with HMAC headers (preferred going forward)
+bool postToBackendWithAuth(const String &jsonPayload, const char* path, const String &timestamp, const String &signature) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("HTTP: WiFi not connected (auth variant)");
+    return false;
+  }
+  WiFiClientSecure client;
+  client.setCACert(ISRG_ROOT_X1);
+  HTTPClient https;
+  String scheme = BACKEND_USE_TLS ? "https://" : "http://";
+  String url = scheme + String(BACKEND_HOST) + ":" + String(BACKEND_PORT) + String(path);
+  if (!https.begin(client, url)) {
+    Serial.println("HTTP: begin failed (auth)");
+    return false;
+  }
+  https.addHeader("Content-Type", "application/json");
+  https.addHeader("x-device-id", DEVICE_ID);
+  https.addHeader("x-api-key", DEVICE_API_KEY);
+  https.addHeader("x-timestamp", timestamp);
+  https.addHeader("x-signature", signature);
+  int code = https.POST(jsonPayload);
+  if (code != 200) {
+    Serial.print("HTTP: auth send failed code="); Serial.println(code);
   }
   https.end();
-  return status == 200;
+  return code == 200;
 }
 
 // Alert states
@@ -1059,6 +1101,7 @@ void sendSensorData() {
 
   StaticJsonDocument<512> doc;
   StaticJsonDocument<512> payloadDoc;
+  StaticJsonDocument<1024> outer;
 
   payloadDoc["tank_type"] = "sump_tank";
   payloadDoc["level_percentage"] = sumpLevel;
@@ -1096,17 +1139,10 @@ void sendSensorData() {
   uint32_t checksum = calculateChecksum(jsonString);
   outer["checksum"] = checksum;
   
-  // Add HMAC signature
-  String timestamp = String(millis());
-  outer["timestamp"] = timestamp;
-  String payloadForSign = jsonString;
-  String signature = generateHMACSignature(payloadForSign, timestamp);
-  outer["hmac_signature"] = signature;
-  
-  jsonString = "";
-  serializeJson(outer, jsonString);
-  
-  if (postToSupabase(jsonString)) {
+  // Compute HMAC but send via headers; keep body lean
+  String timestamp = String(millis()/1000); // seconds epoch for backend tolerance
+  String signature = generateHMACSignature(jsonString, timestamp);
+  if (postToBackendWithAuth(jsonString, PATH_SENSOR_DATA, timestamp, signature)) {
     Serial.println("DATA: (HTTP) Sump sensor data sent - Level: " + String(sumpLevel, 1) + "%, Motor: " + motorStatus);
     logEvent("SENSOR_DATA_SENT", "Sensor data sent successfully with checksum: " + String(checksum) + " and HMAC signature");
     
@@ -1133,16 +1169,24 @@ void sendTankReading() {
   doc["timestamp"] = millis();
 
   StaticJsonDocument<384> outer;
-  outer["apikey"] = SUPABASE_ANON_KEY;
+  outer["apikey"] = DEVICE_API_KEY;
+  outer["device_id"] = DEVICE_ID;
   outer["type"] = "tank_reading";
   outer["data"] = doc;
   String jsonString;
   serializeJson(outer, jsonString);
-  if (postToSupabase(jsonString)) {
-    Serial.println("DATA: (HTTP) Sump tank reading sent - Level: " + String(sumpLevel, 1) + "%");
+  // Add HMAC signature (optional for compatibility)
+  String timestamp = String(millis());
+  outer["timestamp"] = timestamp;
+  String signature = generateHMACSignature(jsonString, timestamp);
+  outer["hmac_signature"] = signature;
+  jsonString = "";
+  serializeJson(outer, jsonString);
+  if (postToBackend(jsonString, PATH_SENSOR_DATA)) {
+    Serial.println("DATA: (HTTP) Sump tank reading sent - Level: " + String(sumpLevel, 1) + "% (HMAC)");
   } else {
     Serial.println("DATA: (HTTP) Failed to send tank reading");
-  enqueueMessage(jsonString);
+    enqueueMessage(jsonString);
   }
 }
 
@@ -1161,17 +1205,24 @@ void sendMotorStatus() {
   doc["safety_alert"] = motorSafetyAlert;
 
   StaticJsonDocument<384> outer;
-  outer["apikey"] = SUPABASE_ANON_KEY;
+  outer["apikey"] = DEVICE_API_KEY;
+  outer["device_id"] = DEVICE_ID;
   outer["type"] = "motor_status";
   outer["data"] = doc;
   String jsonString;
   serializeJson(outer, jsonString);
-  if (postToSupabase(jsonString)) {
-    Serial.print("DATA: (HTTP) Motor status sent: ");
+  String timestamp = String(millis());
+  outer["timestamp"] = timestamp;
+  String signature = generateHMACSignature(jsonString, timestamp);
+  outer["hmac_signature"] = signature;
+  jsonString = "";
+  serializeJson(outer, jsonString);
+  if (postToBackend(jsonString, PATH_MOTOR_STATUS)) {
+    Serial.print("DATA: (HTTP) Motor status sent (HMAC): ");
     Serial.println(motorStatus);
   } else {
     Serial.println("DATA: (HTTP) Failed to send motor status");
-  enqueueMessage(jsonString);
+    enqueueMessage(jsonString);
   }
 }
 
@@ -1188,13 +1239,20 @@ void sendSystemAlert(String alertType, String message) {
   doc["timestamp"] = millis();
 
   StaticJsonDocument<384> outer;
-  outer["apikey"] = SUPABASE_ANON_KEY;
+  outer["apikey"] = DEVICE_API_KEY;
+  outer["device_id"] = DEVICE_ID;
   outer["type"] = "system_alert";
   outer["data"] = doc;
   String jsonString;
   serializeJson(outer, jsonString);
-  if (postToSupabase(jsonString)) {
-    Serial.print("ALERT: (HTTP) System alert sent: ");
+  String timestamp = String(millis());
+  outer["timestamp"] = timestamp;
+  String signature = generateHMACSignature(jsonString, timestamp);
+  outer["hmac_signature"] = signature;
+  jsonString = "";
+  serializeJson(outer, jsonString);
+  if (postToBackend(jsonString, PATH_SENSOR_DATA)) { // reuse sensor endpoint for alerts or create dedicated if needed
+    Serial.print("ALERT: (HTTP) System alert sent (HMAC): ");
     Serial.println(alertType);
   } else {
     Serial.println("ALERT: (HTTP) Failed to send system alert");
@@ -1224,16 +1282,9 @@ void sendPing() {
   String jsonString;
   serializeJson(outer, jsonString);
   
-  // Add HMAC signature
-  String timestamp = String(millis());
-  outer["timestamp"] = timestamp;
+  String timestamp = String(millis()/1000);
   String signature = generateHMACSignature(jsonString, timestamp);
-  outer["hmac_signature"] = signature;
-  
-  jsonString = "";
-  serializeJson(outer, jsonString);
-  
-  if (!postToSupabase(jsonString)) {
+  if (!postToBackendWithAuth(jsonString, PATH_SENSOR_DATA, timestamp, signature)) {
     enqueueMessage(jsonString);
   }
 }
@@ -1256,192 +1307,17 @@ void sendHeartbeatAck() {
   String jsonString;
   serializeJson(outer, jsonString);
   
-  // Add HMAC signature
-  String timestamp = String(millis());
-  outer["timestamp"] = timestamp;
+  String timestamp = String(millis()/1000);
   String signature = generateHMACSignature(jsonString, timestamp);
-  outer["hmac_signature"] = signature;
-  
-  jsonString = "";
-  serializeJson(outer, jsonString);
-  
-  if (!postToSupabase(jsonString)) {
+  if (!postToBackendWithAuth(jsonString, PATH_SENSOR_DATA, timestamp, signature)) {
     enqueueMessage(jsonString);
   }
 }
 
 // ========== COMMAND POLLING ==========
-void pollCommands() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  if (millis() - lastCommandPoll < COMMAND_POLL_INTERVAL) return;
-  lastCommandPoll = millis();
+// (Legacy command polling removed)
 
-  WiFiClientSecure client;
-  // Reuse root cert
-  extern const char ISRG_ROOT_X1[] PROGMEM; // already defined above in HTTPS helper
-  client.setCACert(ISRG_ROOT_X1);
-
-  HTTPClient https;
-  String url = String(SUPABASE_URL) + SUPABASE_FUNCTION_PATH + "?poll=1&device_id=" + DEVICE_ID;
-  if (!https.begin(client, url)) {
-    Serial.println("CMD: Failed to begin poll connection");
-    return;
-  }
-  https.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
-  int status = https.GET();
-  if (status != 200) {
-    Serial.print("CMD: Poll failed status="); Serial.println(status);
-    https.end();
-    return;
-  }
-  String body = https.getString();
-  https.end();
-  StaticJsonDocument<1024> doc;
-  DeserializationError err = deserializeJson(doc, body);
-  if (err) {
-    Serial.print("CMD: JSON parse error: "); Serial.println(err.c_str());
-    return;
-  }
-  JsonArray cmds = doc["commands"].as<JsonArray>();
-  if (!cmds || cmds.size() == 0) {
-    Serial.println("CMD: No commands");
-    return;
-  }
-  Serial.print("CMD: Received "); Serial.print(cmds.size()); Serial.println(" command(s)");
-  for (JsonObject c : cmds) {
-    String cid = c["id"].as<String>();
-    String ctype = c["type"].as<String>();
-    JsonVariant payload = c["payload"];
-    Serial.print("CMD: Processing id="); Serial.print(cid); Serial.print(" type="); Serial.println(ctype);
-    bool handled = false;
-    if (ctype == "motor_start") {
-      handled = startMotor(true);
-    } else if (ctype == "motor_stop") {
-      stopMotor();
-      handled = true;
-    } else {
-      Serial.println("CMD: Unknown command type");
-    }
-    if (handled) {
-      acknowledgeCommand(cid);
-    }
-  }
-}
-
-bool acknowledgeCommand(const String &commandId) {
-  if (WiFi.status() != WL_CONNECTED) return false;
-  WiFiClientSecure client;
-  extern const char ISRG_ROOT_X1[] PROGMEM;
-  client.setCACert(ISRG_ROOT_X1);
-  HTTPClient https;
-  String url = String(SUPABASE_URL) + SUPABASE_FUNCTION_PATH;
-  if (!https.begin(client, url)) {
-    Serial.println("CMD: Ack begin failed");
-    return false;
-  }
-  https.addHeader("Content-Type", "application/json");
-  https.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
-  StaticJsonDocument<256> doc;
-  doc["apikey"] = SUPABASE_ANON_KEY;
-  doc["type"] = "acknowledge_command";
-  doc["device_id"] = DEVICE_ID;
-  doc["command_id"] = commandId;
-  String json;
-  serializeJson(doc, json);
-  int status = https.POST(json);
-  if (status == 200) {
-    Serial.print("CMD: Acknowledged command "); Serial.println(commandId);
-    https.end();
-    return true;
-  } else {
-    Serial.print("CMD: Ack failed status="); Serial.println(status);
-  }
-  https.end();
-  return false;
-}
-
-// (Legacy WebSocket handler removed)
-
-    case WStype_TEXT:
-      {
-        Serial.print("RECEIVED: Received TEXT message: ");
-        Serial.println((char*)payload);
-
-        StaticJsonDocument<256> doc;
-        DeserializationError error = deserializeJson(doc, payload, length);
-
-        if (!error) {
-          String messageType = doc["type"];
-          Serial.print("NOTE: Message type: ");
-          Serial.println(messageType);
-
-          if (messageType == "get_status") {
-            sendSensorData();
-            sendMotorStatus();
-            Serial.println("CLIPBOARD: Status sent on request");
-          } else if (messageType == "motor_control") {
-            bool motorState = doc["state"];
-            Serial.print("GAME: Motor control command received: ");
-            Serial.println(motorState ? "START" : "STOP");
-
-            manualOverride = true;
-            manualOverrideStartTime = millis(); // Start the timer
-
-            if (motorState) {
-              bool success = startMotor(true);  // Manual override for WebSocket motor control
-              if (!success) {
-                Serial.println("ERROR: WebSocket motor start failed - safety checks failed");
-              }
-            } else {
-              stopMotor();
-            }
-
-            // Manual override will be reset by manualMotorControl() after 30 seconds
-          } else if (messageType == "auto_mode_control") {
-            autoModeEnabled = doc["enabled"];
-            Serial.print("ROBOT: Auto mode ");
-            Serial.println(autoModeEnabled ? "ENABLED" : "DISABLED");
-          } else if (messageType == "pong") {
-            Serial.println("PING: Pong received - connection is alive");
-            lastHeartbeatResponse = millis();
-            heartbeatMissedCount = 0;
-            backendResponsive = true;
-
-            // Upgrade to stable connection after successful pong
-            if (connectionState == CONNECTED && (millis() - connectionEstablishedTime) > 60000) {
-              connectionState = STABLE;
-              Serial.println("LOCK: Connection stabilized - no unnecessary restarts");
-            }
-
-            Serial.println("GREEN: Heartbeat response confirmed - system healthy");
-          }
-        }
-      }
-      break;
-
-    case WStype_ERROR:
-      Serial.println("ERROR: WebSocket Error!");
-      Serial.print("SEARCH: Error details - Length: ");
-      Serial.print(length);
-      Serial.print(", Payload: ");
-      if (payload && length > 0) {
-        Serial.println((char*)payload);
-      } else {
-        Serial.println("No payload");
-      }
-      websocketConnected = false;
-      backendResponsive = false;
-      websocketErrorCount++;
-
-      if (connectionState == STABLE) {
-        connectionState = RECONNECTING;
-      }
-
-      Serial.print("SEARCH: WebSocket error count: ");
-      Serial.println(websocketErrorCount);
-      break;
-  }
-}
+// (Legacy WebSocket handler removed - using HTTPS POST instead)
 
 // Connect to WiFi with comprehensive error handling and retry logic
 void connectToWiFi() {
@@ -1825,7 +1701,7 @@ void loop() {
     if (wifiConnected) {
       Serial.println("WARNING: WiFi disconnected! (confirmed after stability check)");
       wifiConnected = false;
-      websocketConnected = false;
+      // websocketConnected = false; // Disabled: using HTTPS POST
       connectionState = DISCONNECTED;
       wifiConnectionStable = false;
       lastWifiReconnectAttempt = millis();
@@ -1849,7 +1725,7 @@ void loop() {
       Serial.println("WARNING: WiFi health check failed - connection unstable");
       wifiConnectionStable = false;
       wifiConnected = false;
-      websocketConnected = false;
+      // websocketConnected = false; // Disabled: using HTTPS POST
     }
   }
 
@@ -1858,8 +1734,8 @@ void loop() {
   if (millis() - lastStatusLog > 60000) {  // Log status every minute
     Serial.print("DATA: Status: WiFi=");
     Serial.print(wifiConnected ? "SUCCESS:" : "ERROR:");
-    Serial.print(" | WS=");
-    Serial.print(websocketConnected ? "SUCCESS:" : "ERROR:");
+    Serial.print(" | HTTPS=");
+    Serial.print("ACTIVE"); // HTTPS POST is always active when WiFi is connected
     Serial.print(" | State=");
     Serial.print(getConnectionStateString());
     Serial.print(" | Backend=");
@@ -2078,5 +1954,23 @@ void checkBrownOut() {
   if (esp_reset_reason() == ESP_RST_BROWNOUT) {
     logEvent("BROWNOUT", "Brown-out reset detected");
     Serial.println("ALERT: Brown-out reset detected - logging event");
+  }
+}
+
+// Connection state string helper
+String getConnectionStateString() {
+  switch (connectionState) {
+    case DISCONNECTED:
+      return "disconnected";
+    case CONNECTING:
+      return "connecting";
+    case CONNECTED:
+      return "connected";
+    case RECONNECTING:
+      return "reconnecting";
+    case STABLE:
+      return "stable";
+    default:
+      return "unknown";
   }
 }

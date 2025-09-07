@@ -13,6 +13,32 @@ export const WaterAnimationDemo = () => {
   const [isAnimating, setIsAnimating] = useState(false);
   const [animationStep, setAnimationStep] = useState(0);
 
+  // Device registration state
+  const [deviceRegistrations, setDeviceRegistrations] = useState<{
+    [key: string]: { apiKey: string; hmacSecret: string }
+  }>({});
+  
+  // Device registration handlers
+  const isDeviceRegistered = (deviceName: string): boolean => {
+    return !!deviceRegistrations[deviceName.toLowerCase()];
+  };
+  
+  const getDeviceKeys = (deviceName: string) => {
+    return deviceRegistrations[deviceName.toLowerCase()] || { apiKey: '', hmacSecret: '' };
+  };
+  
+  const handleDeviceRegistration = (deviceName: string, apiKey: string, hmacSecret: string) => {
+    setDeviceRegistrations(prev => ({
+      ...prev,
+      [deviceName.toLowerCase()]: { apiKey, hmacSecret }
+    }));
+  };
+  
+  const requestPinForEsp32Connect = (deviceName: string, onSuccess: () => void) => {
+    // For demo purposes, just call onSuccess
+    onSuccess();
+  };
+
   // Predefined animation sequences
   const animationSequences = [
     { top: 75, sump: 25, delay: 0 },
@@ -135,11 +161,18 @@ export const WaterAnimationDemo = () => {
               wifiStrength: -45,
               lastSeen: new Date()
             }}
+            floatSwitch={false}
+            motorRunning={topTankLevel < 30 && sumpTankLevel > 20}
+            manualOverride={false}
+            onRequestEsp32Connect={requestPinForEsp32Connect}
             initialMacAddress="6C:C8:40:4D:B8:3C"
-            initialIpAddress="192.168.0.234"
+            initialIpAddress="192.168.1.100"
             onConfigChange={(config) => {
               console.log('Top Tank ESP32 config updated:', config);
             }}
+            isDeviceRegistered={isDeviceRegistered('top')}
+            deviceKeys={getDeviceKeys('top')}
+            onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('top', apiKey, hmacSecret)}
           />
 
           <EnhancedTankMonitor
@@ -156,11 +189,16 @@ export const WaterAnimationDemo = () => {
             }}
             floatSwitch={sumpTankLevel > 80}
             motorRunning={topTankLevel < 30 && sumpTankLevel > 20}
+            manualOverride={false}
+            onRequestEsp32Connect={requestPinForEsp32Connect}
             initialMacAddress="80:F3:DA:65:86:6C"
-            initialIpAddress="192.168.0.184"
+            initialIpAddress="192.168.1.101"
             onConfigChange={(config) => {
               console.log('Sump Tank ESP32 config updated:', config);
             }}
+            isDeviceRegistered={isDeviceRegistered('sump')}
+            deviceKeys={getDeviceKeys('sump')}
+            onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('sump', apiKey, hmacSecret)}
           />
         </div>
 

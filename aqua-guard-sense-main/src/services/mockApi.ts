@@ -5,24 +5,27 @@ import { TankReading, MotorEvent, SystemAlert, SystemStatus, ConsumptionData, ES
 // Mock data for tanks
 const mockTanks: TankReading[] = [
   {
-    id: '1',
-    tank_type: 'top',
-    level_percentage: 75,
-    level_liters: 750,
+    id: '1',  // FIXED: Keep string ID for consistency 
+    tank_type: 'top_tank',  // FIXED: renamed from 'top' to standard 'top_tank'
+    level_percentage: 72,
+    level_liters: 720,
     sensor_health: 'good',
-    esp32_id: 'esp32-top-01',
-    signal_strength: 85,
+    esp32_id: 'TOP_TANK',
+    signal_strength: -45,
     float_switch: true,
+    motor_running: false,
+    manual_override: false,
+    auto_mode_enabled: true,
     timestamp: new Date().toISOString()
   },
   {
-    id: '2',
-    tank_type: 'sump',
+    id: '2',  // FIXED: Keep string ID for consistency
+    tank_type: 'sump_tank',  // FIXED: renamed from 'sump' to standard 'sump_tank'
     level_percentage: 45,
-    level_liters: 450,
+    level_liters: 5951,
     sensor_health: 'good',
-    esp32_id: 'esp32-sump-01',
-    signal_strength: 78,
+    esp32_id: 'SUMP_TANK',  // FIXED: Use standard device ID
+    signal_strength: -52,
     float_switch: false,
     motor_running: false,
     manual_override: false,
@@ -123,11 +126,11 @@ const mockMonthlyConsumption: ConsumptionData[] = Array.from({ length: 30 }, (_,
 // Mock data for ESP32 devices
 const mockESP32Devices: ESP32Device[] = [
   {
-    id: 'esp32-top-01',
+    id: 'TOP_TANK',  // FIXED: renamed from 'esp32-top-01' to standard device ID
     mac_address: '30:AE:A4:1F:54:32',
     ip_address: '192.168.0.120',
     device_type: 'top_tank_monitor',
-    firmware_version: '1.2.0',
+    firmware_version: '2.1.0',  // FIXED: Updated to current version
     status: 'online',
     is_connected: true,
     current_ip: '192.168.0.120',
@@ -136,11 +139,11 @@ const mockESP32Devices: ESP32Device[] = [
     created_at: new Date(Date.now() - 2592000000).toISOString() // 30 days ago
   },
   {
-    id: 'esp32-sump-01',
+    id: 'SUMP_TANK',  // FIXED: renamed from 'esp32-sump-01' to standard device ID
     mac_address: '30:AE:A4:1F:54:33',
     ip_address: '192.168.0.121',
     device_type: 'sump_tank_monitor',
-    firmware_version: '1.2.0',
+    firmware_version: '2.1.0',  // FIXED: Updated to current version
     status: 'online',
     is_connected: true,
     current_ip: '192.168.0.121',
@@ -210,7 +213,7 @@ export const mockApiService = {
     return new Promise((resolve) => {
       setTimeout(() => {
         // Update the sump tank auto mode
-        const sumpTank = mockTanks.find(tank => tank.tank_type === 'sump');
+        const sumpTank = mockTanks.find(tank => tank.tank_type === 'sump_tank'); // FIXED: renamed from 'sump' to standard 'sump_tank'
         if (sumpTank) {
           sumpTank.auto_mode_enabled = enabled;
         }
@@ -223,7 +226,7 @@ export const mockApiService = {
     return new Promise((resolve) => {
       setTimeout(() => {
         // Update the sump tank auto mode
-        const sumpTank = mockTanks.find(tank => tank.tank_type === 'sump');
+        const sumpTank = mockTanks.find(tank => tank.tank_type === 'sump_tank'); // FIXED: renamed from 'sump' to standard 'sump_tank'
         if (sumpTank) {
           sumpTank.auto_mode_enabled = enabled;
         }

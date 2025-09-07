@@ -82,7 +82,7 @@ class AIService {
         confidence: 0.8,
         timestamp: new Date().toISOString(),
         priority: 'high'
-      });
+      } as AIInsight);
     }
 
     // Check for frequent motor starts
@@ -96,7 +96,7 @@ class AIService {
         confidence: 0.9,
         timestamp: new Date().toISOString(),
         priority: 'medium'
-      });
+      } as AIInsight);
     }
 
     return insights;
@@ -122,7 +122,7 @@ class AIService {
         confidence: 0.85,
         timestamp: new Date().toISOString(),
         priority: 'low'
-      });
+      } as AIInsight);
     }
 
     return insights;

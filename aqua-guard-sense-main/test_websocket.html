@@ -12,12 +12,16 @@
         const status = document.getElementById('status');
         const messages = document.getElementById('messages');
         
-        const ws = new WebSocket('ws://127.0.0.1:54321/functions/v1/websocket');
+        const ws = new WebSocket('ws://localhost:8083');
         
         ws.onopen = () => {
             status.textContent = 'Connected';
             status.style.color = 'green';
-            ws.send(JSON.stringify({ type: 'ping', apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0' }));
+            ws.send(JSON.stringify({ 
+                type: 'esp32_register', 
+                esp32_id: 'TEST_ESP32_001',
+                device_type: 'test_device'
+            }));
         };
         
         ws.onmessage = (event) => {

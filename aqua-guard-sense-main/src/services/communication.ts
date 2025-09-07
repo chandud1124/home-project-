@@ -9,10 +9,10 @@ import {
   validateWebSocketMessage,
   validateDeviceCommand
 } from '@/lib/schemas'
+import { supabase } from '@/services/api'
 
 export interface CommunicationConfig {
-  supabaseUrl: string
-  supabaseKey: string
+  supabase: SupabaseClient
   backendUrl: string
   wsUrl: string
   maxRetries: number
@@ -50,7 +50,7 @@ export class EnhancedCommunicationService {
 
   constructor(config: CommunicationConfig) {
     this.config = config
-    this.supabase = createClient(config.supabaseUrl, config.supabaseKey)
+    this.supabase = config.supabase
     this.initializeHeartbeat()
   }
 
@@ -115,10 +115,10 @@ export class EnhancedCommunicationService {
   async connectWebSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.eventSource = new EventSource(`${this.config.wsUrl}?apikey=${this.config.supabaseKey}`)
+        this.webSocket = new WebSocket(this.config.wsUrl)
 
-        this.eventSource.onopen = () => {
-          console.log('🔗 Enhanced WebSocket connected')
+        this.webSocket.onopen = () => {
+          console.log('🔗 WebSocket connected')
           this.updateConnectionState({
             ...this.connectionState,
             isOnline: true,
@@ -127,7 +127,7 @@ export class EnhancedCommunicationService {
           resolve()
         }
 
-        this.eventSource.onmessage = (event) => {
+        this.webSocket.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data)
             this.handleIncomingMessage(data)
@@ -136,10 +136,18 @@ export class EnhancedCommunicationService {
           }
         }
 
-        this.eventSource.onerror = (error) => {
+        this.webSocket.onerror = (error) => {
           console.error('❌ WebSocket error:', error)
           this.handleConnectionError()
           reject(error)
+        }
+
+        this.webSocket.onclose = (event) => {
+          console.log('🔌 WebSocket closed:', event.code, event.reason)
+          this.updateConnectionState({
+            ...this.connectionState,
+            isOnline: false
+          })
         }
 
         // Set connection timeout
@@ -225,7 +233,6 @@ export class EnhancedCommunicationService {
           ...options,
           headers: {
             'Content-Type': 'application/json',
-            'apikey': this.config.supabaseKey,
             ...options.headers
           }
         })
@@ -285,6 +292,11 @@ export class EnhancedCommunicationService {
 
   // Disconnect and cleanup
   disconnect() {
+    if (this.webSocket) {
+      this.webSocket.close()
+      this.webSocket = null
+    }
+
     if (this.eventSource) {
       this.eventSource.close()
       this.eventSource = null
@@ -309,10 +321,9 @@ export class EnhancedCommunicationService {
 // Factory function to create configured service
 export function createCommunicationService(): EnhancedCommunicationService {
   const config: CommunicationConfig = {
-    supabaseUrl: import.meta.env.VITE_SUPABASE_URL || 'your-supabase-url',
-    supabaseKey: import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-supabase-anon-key',
-  backendUrl: import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001',
-  wsUrl: import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'ws://localhost:8083',
+    supabase: supabase,
+    backendUrl: import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001',
+    wsUrl: import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'ws://localhost:8083',
     maxRetries: 5,
     retryDelay: 1000,
     connectionTimeout: 10000

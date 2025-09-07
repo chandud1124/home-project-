@@ -18,6 +18,8 @@ interface MobileDashboardProps {
   // Tank data
   totalWaterLevel: number;
   waterLevelChange: number;
+  sumpLevelPercentage: number;
+  topLevelPercentage: number;
   
   // Motor data
   motorStatus: string;
@@ -54,13 +56,26 @@ interface MobileDashboardProps {
   dailyConsumptionData: ConsumptionPoint[];
   monthlyConsumptionData: ConsumptionPoint[];
   
-  // Handlers
+    // Handlers
   onToggleAutoMode: (enabled: boolean) => void;
   onMotorStart: () => void;
   onMotorStop: () => void;
   onRefreshEsp32Status: () => void;
   onAIQuerySubmit: (query: string) => void;
   queryResponse: string;
+  
+  // Device registration
+  deviceRegistrationState: {
+    sumpTankRegistered: boolean;
+    topTankRegistered: boolean;
+    sumpTankApiKey: string;
+    sumpTankHmacSecret: string;
+    topTankApiKey: string;
+    topTankHmacSecret: string;
+  };
+  onDeviceRegistration?: (deviceType: 'sump' | 'top', apiKey: string, hmacSecret: string) => void;
+  onRequestEsp32Connect?: (deviceName: string, onSuccess: () => void) => void;
+  onRequestPinForKeys?: (deviceName: string, onSuccess: () => void) => void;
 };
 
 // Domain type aliases
@@ -71,6 +86,8 @@ type ConsumptionPoint = ConsumptionData;
 const MobileDashboard: React.FC<MobileDashboardProps> = ({
   totalWaterLevel,
   waterLevelChange,
+  sumpLevelPercentage,
+  topLevelPercentage,
   motorStatus,
   motorLastRun,
   motorRuntime,
@@ -86,6 +103,10 @@ const MobileDashboard: React.FC<MobileDashboardProps> = ({
   esp32SumpStatus,
   dailyConsumptionData,
   monthlyConsumptionData,
+  deviceRegistrationState,
+  onDeviceRegistration,
+  onRequestEsp32Connect,
+  onRequestPinForKeys,
   onToggleAutoMode,
   onMotorStart,
   onMotorStop,
@@ -94,6 +115,34 @@ const MobileDashboard: React.FC<MobileDashboardProps> = ({
   queryResponse
 }) => {
   const [activeTab, setActiveTab] = React.useState('tanks');
+  
+  // Device registration helpers using passed props
+  const isDeviceRegistered = (deviceName: string): boolean => {
+    const deviceType = deviceName.toLowerCase();
+    return deviceType === 'top' ? deviceRegistrationState.topTankRegistered : deviceRegistrationState.sumpTankRegistered;
+  };
+  
+  const getDeviceKeys = (deviceName: string) => {
+    const deviceType = deviceName.toLowerCase();
+    if (deviceType === 'top') {
+      return { apiKey: deviceRegistrationState.topTankApiKey, hmacSecret: deviceRegistrationState.topTankHmacSecret };
+    } else {
+      return { apiKey: deviceRegistrationState.sumpTankApiKey, hmacSecret: deviceRegistrationState.sumpTankHmacSecret };
+    }
+  };
+  
+  const handleDeviceRegistration = (deviceName: string, apiKey: string, hmacSecret: string) => {
+    const deviceType = deviceName.toLowerCase() === 'top' ? 'top' : 'sump';
+    if (onDeviceRegistration) {
+      onDeviceRegistration(deviceType, apiKey, hmacSecret);
+    }
+  };
+  
+  const requestPinForEsp32Connect = (deviceName: string, onSuccess: () => void) => {
+    if (onRequestEsp32Connect) {
+      onRequestEsp32Connect(deviceName, onSuccess);
+    }
+  };
   
   // Handle swipe gestures for tab navigation
   const { ref } = useSwipeGestures({
@@ -151,21 +200,47 @@ const MobileDashboard: React.FC<MobileDashboardProps> = ({
           <EnhancedTankMonitor 
             title="Top Tank"
             symbol="🏠"
-            currentLevel={75}
+            currentLevel={topLevelPercentage}
             capacity={2000}
             status={motorStatus === 'Running' ? 'normal' : 'normal'}
             sensorHealth="online"
             esp32Status={esp32TopStatus}
+            floatSwitch={false}
+            motorRunning={motorRunning}
+            manualOverride={false}
+            onRequestEsp32Connect={requestPinForEsp32Connect}
+            onRequestPinForKeys={onRequestPinForKeys}
+            initialMacAddress="80:F3:DA:65:86:6C"
+            initialIpAddress="192.168.1.101"
+            onConfigChange={(config) => {
+              console.log('Top Tank ESP32 config updated:', config);
+            }}
+            isDeviceRegistered={isDeviceRegistered('top')}
+            deviceKeys={getDeviceKeys('top')}
+            onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('top', apiKey, hmacSecret)}
           />
           
           <EnhancedTankMonitor 
             title="Sump Tank"
             symbol="🕳️"
-            currentLevel={45}
+            currentLevel={sumpLevelPercentage}
             capacity={12500}
             status="normal"
             sensorHealth="online"
             esp32Status={esp32SumpStatus}
+            floatSwitch={false}
+            motorRunning={motorRunning}
+            manualOverride={false}
+            onRequestEsp32Connect={requestPinForEsp32Connect}
+            onRequestPinForKeys={onRequestPinForKeys}
+            initialMacAddress="80:F3:DA:65:86:6C"
+            initialIpAddress="192.168.1.101"
+            onConfigChange={(config) => {
+              console.log('Sump Tank ESP32 config updated:', config);
+            }}
+            isDeviceRegistered={isDeviceRegistered('sump')}
+            deviceKeys={getDeviceKeys('sump')}
+            onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('sump', apiKey, hmacSecret)}
           />
         </TabsContent>
 
@@ -215,8 +290,8 @@ const MobileDashboard: React.FC<MobileDashboardProps> = ({
           </div>
           
           <ConsumptionChart 
-            dailyData={dailyConsumptionData}
-            monthlyData={monthlyConsumptionData}
+            dailyData={dailyConsumptionData as any}
+            monthlyData={monthlyConsumptionData as any}
           />
           
           <AIInsightsPanel
@@ -254,7 +329,7 @@ const MobileDashboard: React.FC<MobileDashboardProps> = ({
             }}
           />
           
-          <SystemAlerts alerts={alerts} />
+          <SystemAlerts alerts={alerts as any} />
         </TabsContent>
       </Tabs>
     </div>

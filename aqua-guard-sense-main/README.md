@@ -1,53 +1,227 @@
-# Aqua Guard Sense
+# AquaGuard Simple - ESP32 Water Tank Monitoring System
 
-A comprehensive IoT solution for monitoring and controlling water tank systems with ESP32 devices, featuring real-time monitoring, automated motor control, and AI-powered analytics.
-## Tech Stack
+A simplified ESP32-based water tank monitoring system with local communication between devices, no internet dependency required.
 
-React + Vite + TypeScript, TailwindCSS (shadcn/radix UI), Supabase (Postgres + Auth + Realtime potential), Firebase Hosting (static frontend delivery), Node/Express backend (real‑time WebSocket + REST), ESP32 firmware (sensor + motor control).
-## Environments & Configuration
+## Features
 
-Frontend (Vite) expects a `.env.local` populated from `.env.example`.
-Backend (Express in `backend/`) expects a `.env` based on `backend/.env.example`.
+### ESP32 Devices
+- **Top Tank ESP32**: Ultrasonic sensor for water level monitoring only
+- **Sump Tank ESP32**: Complete control system with sensors, motor control, LEDs, switches, and buzzer
 
-Key variables:
-- SUPABASE_URL / VITE_SUPABASE_URL: Project base URL
-- SUPABASE_ANON_KEY / VITE_SUPABASE_ANON_KEY: Public anon key (frontend safe)
-- SUPABASE_SERVICE_ROLE_KEY: (Backend only) Never expose client side
-- PORT / WS_PORT: HTTP + WebSocket ports (defaults 3001 / 8083)
+### Sump Tank Features
+- Ultrasonic sensor for water level measurement
+- Float switch for hardware safety verification
+- Motor control with relay (230V AC motor)
+- LED indicators:
+  - Low level (25%): LED on steady
+  - High level (85%): LED blink
+  - Critical level (90%): LED on steady + buzzer alarm (3 rings)
+  - Auto/Manual mode indicator
+- Manual controls:
+  - Motor on/off switch (any mode)
+  - Auto/Manual mode switch
+- Buzzer alarm at 90% water level (3 rings to prevent overflow)
 
-## Deployment Overview
+### Communication
+- Local WiFi network communication between ESP32 devices
+- No internet or backend server required
+- Direct HTTP communication between devices
 
-1. Supabase: Run migrations (`supabase db push` or CLI) to provision schema & policies.
-2. Backend: Deploy on a VM / container (bind 0.0.0.0, ensure env vars set). Optionally behind a reverse proxy (Caddy / Nginx) with HTTPS.
-3. Frontend: `npm run build` then `firebase deploy --only hosting` (uses `firebase.json`). Supply Vite env vars at build time.
-4. Devices (ESP32): Point firmware to backend public host (NOT the Firebase hosting domain; Firebase only serves static assets). Use full URL: `http://your-backend-domain/api/esp32/...`.
+### User Interface
+- Separate cards for Top Tank and Sump Tank monitoring
+- Device configuration via MAC address and IP address
+- Automatic secret key generation for device security
+- Real-time status updates and connection testing
 
-## Firebase vs Supabase Roles
+## Hardware Requirements
 
-Firebase Hosting: Serves compiled SPA, optional CDN edge caching.
-Supabase: Database, future auth, row-level security, (optional) realtime channels.
-Express Backend: Device ingestion, motor logic, WebSocket broadcast; can be reduced if you migrate logic into Supabase edge functions.
+### Top Tank ESP32
+- ESP32 Dev Board
+- AJ-SR04M Ultrasonic Sensor (TRIG/ECHO mode)
+- Power supply (5V)
 
-## Security Hardening Checklist
+**Wiring:**
+- TRIG -> GPIO 5
+- ECHO -> GPIO 18
+- GND -> ESP32 GND
+- VCC -> ESP32 5V
 
-- [ ] Rotate any leaked anon/service keys after removing hardcoded values
-- [ ] Replace permissive RLS policies with principle-of-least-privilege (device row scoping)
-- [ ] Add auth middleware for control endpoints (`motor`, `alerts`, `device` config)
-- [ ] Enforce HTTPS externally; redirect HTTP
-- [ ] Add rate limiting + basic request validation (Zod)
+### Sump Tank ESP32
+- ESP32 Dev Board
+- AJ-SR04M Ultrasonic Sensor
+- Float Switch (normally open)
+- Relay Module for Motor Control
+- Buzzer
+- 4 LEDs
+- 2 Push Buttons (normally open)
+- 1 Toggle Switch for mode selection
+- Power supply (5V)
 
-## Local Development Quick Start
+**Wiring:**
+- Ultrasonic TRIG -> GPIO 5, ECHO -> GPIO 18
+- Float Switch -> GPIO 4 (with pull-up)
+- Motor Relay -> GPIO 13
+- Buzzer -> GPIO 14
+- Auto Mode LED -> GPIO 16
+- Sump Full LED -> GPIO 17
+- Sump Low LED -> GPIO 21
+- Manual Motor Switch -> GPIO 25 (with pull-up)
+- Mode Switch -> GPIO 26 (with pull-up)
 
+## ESP32 Firmware Setup
+
+### Unified Firmware Files
+The project now uses unified, standalone firmware files with all configurations inline:
+
+#### Top Tank ESP32
+1. Open `esp32/ESP32_TopTank.ino` in Arduino IDE
+2. Update WiFi credentials:
+   ```cpp
+   #define WIFI_SSID "Your_WiFi_SSID"
+   #define WIFI_PASSWORD "Your_WiFi_Password"
+   ```
+3. Update Sump Tank IP address if needed:
+   ```cpp
+   #define SUMP_TANK_IP "192.168.1.101"
+   ```
+4. Upload to ESP32
+
+#### Sump Tank ESP32
+1. Open `esp32/ESP32_SumpTank.ino` in Arduino IDE
+2. Update WiFi credentials:
+   ```cpp
+   #define WIFI_SSID "Your_WiFi_SSID"
+   #define WIFI_PASSWORD "Your_WiFi_Password"
+   ```
+3. Update Top Tank IP address if needed:
+   ```cpp
+   #define TOP_TANK_IP "192.168.1.100"
+   ```
+4. Upload to ESP32
+
+### 2. Frontend Setup
+
+#### Local Development
 ```bash
-pnpm install # or npm install
-cp .env.example .env.local
-cp backend/.env.example backend/.env
-# Fill in Supabase project values
-pnpm --filter water-tank-backend run dev & # if using workspaces; otherwise cd backend && npm run dev
-npm run dev # root - starts Vite frontend on 8081
+npm install
+npm run dev
 ```
 
-Backend will log Supabase connectivity status on startup. Visit http://localhost:8081.
+#### Build for Production
+```bash
+npm run build
+```
+
+#### Deploy to Firebase
+```bash
+npm run deploy:frontend
+```
+
+### 3. Device Configuration
+
+1. Open the web interface
+2. Click "Add Top Tank" or "Add Sump Tank"
+3. Enter the ESP32's MAC address and IP address
+4. Copy the generated secret key
+5. Add the secret key to your ESP32 firmware before uploading
+
+## System Operation
+
+### Automatic Mode (Default)
+- Motor starts when sump level drops below 25%
+- Motor stops when sump level reaches 75%
+- Float switch provides hardware safety verification
+- System prevents dry running
+
+### Manual Mode
+- Motor control via physical switch
+- Auto mode LED turns off
+- Manual override for maintenance
+
+### Alarm System
+- Buzzer sounds 3 times when sump reaches 90%
+- Prevents overflow by alerting user
+- LEDs provide continuous visual feedback
+
+### Communication Flow
+1. Top Tank ESP32 measures water level
+2. Sends level data to Sump Tank ESP32 via HTTP
+3. Sump Tank ESP32 uses this data for motor control decisions
+4. Sump Tank ESP32 sends status updates back to Top Tank
+
+## Network Configuration
+
+Both ESP32 devices must be on the same WiFi network:
+- Same SSID and password
+- Static IP addresses recommended for reliability
+- Ensure devices can communicate via HTTP (ports 80)
+
+## Troubleshooting
+
+### ESP32 Connection Issues
+- Verify WiFi credentials in the firmware files
+- Check IP address configuration in both ESP32 files
+- Ensure devices are on same network
+- Test HTTP connectivity between devices
+
+### Sensor Issues
+- Verify ultrasonic sensor wiring (TRIG=5, ECHO=18)
+- Check float switch polarity (sump tank only)
+- Calibrate sensor offset if needed
+
+### Motor Control Issues
+- Verify relay wiring and power (sump tank only)
+- Check motor switch functionality
+- Test manual vs automatic modes
+
+## Security
+
+- Each device uses a unique secret key
+- Local network communication only
+- No internet dependency
+- Physical switch controls for critical operations
+
+## Deployment
+
+### Firebase Hosting
+```bash
+firebase deploy --only hosting
+```
+
+### Supabase (Optional)
+For data persistence if needed:
+```bash
+supabase functions deploy
+```
+
+## File Structure
+
+```
+esp32/
+├── ESP32_TopTank.ino        # Unified Top Tank firmware (all config inline)
+├── ESP32_SumpTank.ino       # Unified Sump Tank firmware (all config inline)
+└── README.md
+
+src/
+├── pages/
+│   └── Index.tsx            # Main dashboard
+├── components/
+│   └── ui/                  # UI components
+└── services/
+    └── api.ts               # API services
+
+firebase.json                # Firebase config
+supabase/
+└── config.toml             # Supabase config
+```
+
+## Support
+
+For issues or questions:
+1. Check the troubleshooting section
+2. Verify hardware connections
+3. Test network connectivity
+4. Review serial monitor output from ESP32
 
 ## ESP32 Endpoint Summary
 

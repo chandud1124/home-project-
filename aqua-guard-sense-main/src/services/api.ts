@@ -9,11 +9,14 @@ const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-supabase-ano
 
 const supabase = createClient(supabaseUrl, supabaseKey)
 
+// Export the supabase client for use in other services
+export { supabase }
+
 // Initialize enhanced communication service
 const communicationService = createCommunicationService()
 
 // Backend configuration (prefer explicit backend vars; no production host fallback to Supabase URL)
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
 const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'ws://localhost:8083'
 
 // Flag to use mock API when backend is not available
@@ -253,7 +256,7 @@ class ApiService {
             let changed = false;
             
             // Store in the appropriate cache based on tank type
-            if (tankData.tank_type === 'sump_tank' || tankData.tank_type === 'sump') {
+            if (tankData.tank_type === 'sump_tank') {  // FIXED: removed 'sump' variant - only standard naming
               console.log('📊 Caching sump tank reading:', tankData.level_percentage);
               lastKnownTankReadings.sump_tank = {
                 ...lastKnownTankReadings.sump_tank,
@@ -317,12 +320,12 @@ class ApiService {
             const sensorData = message.data.payload;
             let changed = false;
             
-            if (sensorData.tank_type === 'sump_tank' || sensorData.tank_type === 'sump') {
+            if (sensorData.tank_type === 'sump_tank') {  // FIXED: removed 'sump' variant - only standard naming
               lastKnownTankReadings.sump_tank.motor_running = sensorData.motor_running !== undefined ? sensorData.motor_running : lastKnownTankReadings.sump_tank.motor_running;
               lastKnownTankReadings.sump_tank.connection_state = sensorData.connection_state || 'connected';
               lastKnownTankReadings.sump_tank.sensor_health = sensorData.sensor_health || 'good';
               changed = true;
-            } else if (sensorData.tank_type === 'top_tank' || sensorData.tank_type === 'top') {
+            } else if (sensorData.tank_type === 'top_tank') {  // FIXED: removed 'top' variant - only standard naming
               lastKnownTankReadings.top_tank.connection_state = sensorData.connection_state || 'connected';
               lastKnownTankReadings.top_tank.sensor_health = sensorData.sensor_health || 'good';
               changed = true;
@@ -603,19 +606,26 @@ class ApiService {
 
   // Tank data methods
   async getTanks(): Promise<TankReading[]> {
+    console.log('🔧 getTanks called, USE_MOCK_API:', USE_MOCK_API);
+    console.log('🔧 BACKEND_URL:', BACKEND_URL);
+    
     if (USE_MOCK_API) {
       return mockApiService.getTanks();
     }
     
     try {
+      console.log('📡 Fetching from:', `${BACKEND_URL}/api/tanks`);
       const response = await fetch(`${BACKEND_URL}/api/tanks`)
+      console.log('📡 Response status:', response.status, response.statusText);
+      
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
       const data = await response.json()
+      console.log('📡 Raw API response:', data);
 
       // Transform the data to match our interface
-      return data.map((reading: any) => ({
+      const transformedData = data.map((reading: any) => ({
         id: reading._id || reading.id || '1',
         tank_type: reading.tank_type,
         level_percentage: reading.level_percentage,
@@ -629,6 +639,9 @@ class ApiService {
         auto_mode_enabled: reading.auto_mode_enabled,
         timestamp: reading.timestamp
       }))
+      
+      console.log('📡 Transformed data:', transformedData);
+      return transformedData;
     } catch (error) {
       console.error('Error fetching tanks:', error)
       
@@ -717,42 +730,59 @@ class ApiService {
     }
     
     try {
-      // Send WebSocket message for motor control
-      this.sendWebSocketMessage({
-        type: 'motor_control',
-        state: action === 'start'
-      })
-
+      console.log(`🎛️ Sending motor ${action} command to backend...`);
+      
       // Also make HTTP request to backend
       const response = await fetch(`${BACKEND_URL}/api/motor/control`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ action })
+        body: JSON.stringify({ 
+          action,
+          manual: true 
+        })
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+        const errorText = await response.text();
+        console.error('Motor control HTTP error:', response.status, errorText);
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`)
       }
 
       const data = await response.json()
+      console.log('🎛️ Backend response:', data);
 
+      if (!data.success) {
+        throw new Error(data.error || 'Motor control command failed')
+      }
+
+      // Send WebSocket message for motor control (after successful HTTP request)
+      this.sendWebSocketMessage({
+        type: 'motor_control',
+        state: action === 'start',
+        manual: true
+      })
+
+      // Create a mock event since backend doesn't return event data yet
+      const mockEvent: MotorEvent = {
+        id: data.command?.id || `motor_${Date.now()}`,
+        event_type: action === 'start' ? 'start' : 'stop',
+        duration: 0,
+        esp32_id: data.command?.device_id || 'ESP32_SUMP_002',
+        motor_running: action === 'start',
+        power_detected: action === 'start',
+        current_draw: action === 'start' ? 5.2 : 0,
+        timestamp: data.command?.created_at || new Date().toISOString()
+      }
+
+      console.log('✅ Motor control command sent successfully:', mockEvent);
       return {
         success: true,
-        event: {
-          id: data.event._id || data.event.id || '1',
-          event_type: data.event.event_type,
-          duration: data.event.duration,
-          esp32_id: data.event.esp32_id,
-          motor_running: data.event.motor_running,
-          power_detected: data.event.power_detected,
-          current_draw: data.event.current_draw,
-          timestamp: data.event.timestamp
-        }
+        event: mockEvent
       }
     } catch (error) {
-      console.error('Error controlling motor:', error)
+      console.error('❌ Error controlling motor:', error)
       if (USE_MOCK_API) {
         console.log('Falling back to mock data');
         return mockApiService.controlMotor(action);
@@ -791,6 +821,59 @@ class ApiService {
         return mockApiService.getMotorEvents();
       }
       return []
+    }
+  }
+
+  // Motor settings methods
+  async getMotorSettings(): Promise<{
+    auto_start_level: number;
+    auto_stop_level: number;
+    max_runtime_minutes: number;
+    min_off_time_minutes: number;
+  }> {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/motor/settings`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      return data.settings;
+    } catch (error) {
+      console.error('Error fetching motor settings:', error);
+      // Return default settings on error
+      return {
+        auto_start_level: 20,
+        auto_stop_level: 80,
+        max_runtime_minutes: 60,
+        min_off_time_minutes: 15
+      };
+    }
+  }
+
+  async updateMotorSettings(settings: {
+    auto_start_level: number;
+    auto_stop_level: number;
+    max_runtime_minutes: number;
+    min_off_time_minutes: number;
+  }): Promise<{ success: boolean }> {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/motor/settings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(settings)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return { success: data.success };
+    } catch (error) {
+      console.error('Error updating motor settings:', error);
+      throw error;
     }
   }
 

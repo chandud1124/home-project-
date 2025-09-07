@@ -136,9 +136,31 @@ const EnhancedIndex = () => {
   const [isFetchingData, setIsFetchingData] = useState(false);
   const [esp32LastSeen, setEsp32LastSeen] = useState<Date | null>(null);
 
-  // Connection state monitoring - temporarily disabled
-  // const [connectionState, setConnectionState] = useState<any>(null);
-  // const [connectionQuality, setConnectionQuality] = useState<'excellent' | 'good' | 'poor' | 'offline'>('offline');
+  // Device registration state
+  const [deviceRegistrations, setDeviceRegistrations] = useState<{
+    [key: string]: { apiKey: string; hmacSecret: string }
+  }>({});
+  
+  // Device registration handlers
+  const isDeviceRegistered = (deviceName: string): boolean => {
+    return !!deviceRegistrations[deviceName.toLowerCase()];
+  };
+  
+  const getDeviceKeys = (deviceName: string) => {
+    return deviceRegistrations[deviceName.toLowerCase()] || { apiKey: '', hmacSecret: '' };
+  };
+  
+  const handleDeviceRegistration = (deviceName: string, apiKey: string, hmacSecret: string) => {
+    setDeviceRegistrations(prev => ({
+      ...prev,
+      [deviceName.toLowerCase()]: { apiKey, hmacSecret }
+    }));
+  };
+  
+  const requestPinForEsp32Connect = (deviceName: string, onSuccess: () => void) => {
+    // For now, just call onSuccess - PIN modal would be implemented here
+    onSuccess();
+  };
 
   // Fetch dashboard data from API
   useEffect(() => {
@@ -256,8 +278,8 @@ const EnhancedIndex = () => {
 
     fetchDashboardData();
 
-    // Refresh data every 30 seconds
-    const interval = setInterval(fetchDashboardData, 30000);
+    // Refresh data every 60 seconds (reduced for performance)  
+    const interval = setInterval(fetchDashboardData, 60000);
     return () => clearInterval(interval);
   }, [toast]);
 
@@ -855,12 +877,19 @@ const EnhancedIndex = () => {
                   lastSeen: esp32LastSeen || new Date()
                 }}
                 symbol="🏠"
+                floatSwitch={false}
+                motorRunning={motorRunning}
+                manualOverride={false}
+                onRequestEsp32Connect={requestPinForEsp32Connect}
                 initialMacAddress="6C:C8:40:4D:B8:3C"
-                initialIpAddress="192.168.0.234"
+                initialIpAddress="192.168.1.100"
                 onConfigChange={(config) => {
                   console.log('Top Tank ESP32 config updated:', config);
                   // Here you can send the config to your backend or handle it as needed
                 }}
+                isDeviceRegistered={isDeviceRegistered('top')}
+                deviceKeys={getDeviceKeys('top')}
+                onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('top', apiKey, hmacSecret)}
               />
             </Card>
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
@@ -881,12 +910,16 @@ const EnhancedIndex = () => {
                 floatSwitch={sumpTankData.float_switch}
                 motorRunning={sumpTankData.motor_running}
                 manualOverride={sumpTankData.manual_override}
+                onRequestEsp32Connect={requestPinForEsp32Connect}
                 initialMacAddress="80:F3:DA:65:86:6C"
-                initialIpAddress="192.168.0.184"
+                initialIpAddress="192.168.1.101"
                 onConfigChange={(config) => {
                   console.log('Sump Tank ESP32 config updated:', config);
                   // Here you can send the config to your backend or handle it as needed
                 }}
+                isDeviceRegistered={isDeviceRegistered('sump')}
+                deviceKeys={getDeviceKeys('sump')}
+                onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('sump', apiKey, hmacSecret)}
               />
             </Card>
           </div>

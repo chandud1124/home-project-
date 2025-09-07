@@ -137,7 +137,7 @@ export const AIInsightsPanel = ({ insights, onQuerySubmit, queryResponse, classN
               <p className="text-sm text-muted-foreground mb-2">{insight.message}</p>
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>Confidence: {Math.round(insight.confidence * 100)}%</span>
-                <span>{insight.timestamp.toLocaleTimeString()}</span>
+                <span>{new Date(insight.timestamp).toLocaleTimeString()}</span>
               </div>
             </div>
             );

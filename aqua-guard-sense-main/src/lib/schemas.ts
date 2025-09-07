@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 // Tank Types
-export const TankTypeSchema = z.enum(['sump_tank', 'top_tank', 'sump', 'top']);
+// FIXED: Removed variant tank types ('sump', 'top') - only standard naming allowed
+export const TankTypeSchema = z.enum(['sump_tank', 'top_tank']);
 export type TankType = z.infer<typeof TankTypeSchema>;
 
 // Connection States

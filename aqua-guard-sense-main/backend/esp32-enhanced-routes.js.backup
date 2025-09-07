@@ -411,11 +411,26 @@ class ESP32Controller {
     }
   };
 
-  // Get pending commands for a device
-  getPendingCommands = (esp32_id) => {
-    const pending = this.pendingEvents.get(esp32_id) || [];
-    this.pendingEvents.delete(esp32_id); // Clear after retrieval
-    return pending;
+  // Handle panic mode events from ESP32
+        type: 'heartbeat',
+        data: {
+          esp32_id,
+          status: status || 'alive',
+          level_percentage,
+          motor_running: motor_running || motor_status,
+          uptime_seconds: uptime_seconds || uptime,
+          timestamp: new Date()
+        }
+      });
+
+      res.json({
+        success: true,
+        server_time: new Date().toISOString(),
+        config_update: await this.getDeviceConfig(esp32_id)
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   };
 
   // Handle panic mode reports from ESP32

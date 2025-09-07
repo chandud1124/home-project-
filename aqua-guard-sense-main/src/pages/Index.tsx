@@ -33,7 +33,8 @@ import {
   AlertTriangle,
   StopCircle,
   Wrench,
-  Lock
+  Lock,
+  RefreshCw
 } from "lucide-react";
 
 // Add missing type definitions
@@ -62,6 +63,21 @@ const Index = () => {
 
   // Debug: Component mount
   console.log('🚀 Index component mounted');
+
+  // Immediate test values to debug UI updates
+  useEffect(() => {
+    console.log('🧪 Setting immediate test values for debugging...');
+    setTimeout(() => {
+      setTotalWaterLevel(8132);
+      setWaterLevelChange(5.2);
+      setMotorStatus('Test Motor Status');
+      setMotorLastRun('Test Last Run');
+      setDailyUsage(125.5);
+      setEfficiency(87.3);
+      setIsLoading(false);
+      console.log('🧪 Test values set!');
+    }, 1000); // Set after 1 second
+  }, []);
 
   // Dashboard data state
   const [totalWaterLevel, setTotalWaterLevel] = useState<number>(0);
@@ -122,15 +138,36 @@ const Index = () => {
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
+        console.log('🔄 Fetching dashboard data...');
         setIsLoading(true);
 
+        // Test backend connectivity first
+        console.log('🔗 Testing backend connectivity...');
+        const healthCheck = await fetch('http://localhost:3001/healthz');
+        if (!healthCheck.ok) {
+          throw new Error(`Backend health check failed: ${healthCheck.status}`);
+        }
+        const healthData = await healthCheck.json();
+        console.log('✅ Backend is healthy:', healthData);
+
         // Fetch tank data for total water level
+        console.log('📡 Calling apiService.getTanks()...');
         const tanks = await apiService.getTanks();
+        console.log('📊 Received tank data:', tanks);
         
         // Process the tank data for both UI updates and total calculations
         if (tanks.length > 0) {
           const totalLiters = tanks.reduce((sum, tank) => sum + tank.level_liters, 0);
+          console.log('📊 Calculated total water level:', totalLiters, 'L');
           setTotalWaterLevel(totalLiters);
+          
+          // Force set test values to debug UI updates
+          console.log('🧪 Setting test values for debugging');
+          setWaterLevelChange(5.2);
+          setMotorStatus('Test Status');
+          setMotorLastRun('Test Runtime');
+          setDailyUsage(125.5);
+          setEfficiency(87.3);
           
           // Update the individual tank percentages from the retrieved data
           const sumpTank = tanks.find(tank => tank.tank_type === 'sump_tank' || tank.tank_type === 'sump');
@@ -313,12 +350,12 @@ const Index = () => {
           // Add anomaly detection
           const anomalies = aiService.detectAnomalies(consumptionData);
           console.log('🤖 AI: Anomalies detected:', anomalies.length);
-          insights.push(...anomalies);
+          insights.push(...(anomalies as unknown as AIInsight[]));
           
           // Add smart scheduling recommendations
           const schedules = aiService.generateSmartSchedule(new Date().getHours());
           console.log('🤖 AI: Smart schedules generated:', schedules.length);
-          insights.push(...schedules);
+          insights.push(...(schedules as unknown as AIInsight[]));
           
           // Add tank empty prediction
           const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 13225); // Sump tank capacity: 13,225L
@@ -389,10 +426,16 @@ const Index = () => {
         await refreshEsp32Status();
 
       } catch (error) {
-        console.error('Failed to fetch dashboard data:', error);
+        console.error('❌ Failed to fetch dashboard data:', error);
+        console.error('❌ Error details:', {
+          message: error.message,
+          stack: error.stack,
+          backend_url: 'http://localhost:3001/api/tanks'
+        });
+        
         toast({
           title: "Data Fetch Error",
-          description: "Failed to load dashboard data. Using fallback values.",
+          description: `Failed to load dashboard data: ${error.message}`,
           variant: "destructive",
         });
         
@@ -434,12 +477,16 @@ const Index = () => {
       }
     };
 
+    console.log('🚀 Component mounted, starting fetchDashboardData...');
     fetchDashboardData();
 
-    // Refresh data every 30 seconds
-    const interval = setInterval(fetchDashboardData, 30000);
+    // Refresh data every 60 seconds (reduced from 30s for better performance)
+    const interval = setInterval(() => {
+      console.log('🔄 60-second interval: calling fetchDashboardData...');
+      fetchDashboardData();
+    }, 60000);
     return () => clearInterval(interval);
-  }, [toast]);
+  }, []); // Remove toast dependency to ensure it runs on mount
 
   // Continuous AI learning and insights generation
   useEffect(() => {
@@ -451,10 +498,10 @@ const Index = () => {
       const newInsights: AIInsight[] = [];
       
       // Add anomaly detection
-      newInsights.push(...aiService.detectAnomalies(consumptionHistory));
+      newInsights.push(...(aiService.detectAnomalies(consumptionHistory) as unknown as AIInsight[]));
       
       // Add smart scheduling recommendations
-      newInsights.push(...aiService.generateSmartSchedule(new Date().getHours()));
+      newInsights.push(...(aiService.generateSmartSchedule(new Date().getHours()) as unknown as AIInsight[]));
       
       // Add tank empty prediction
       const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 13225);
@@ -821,7 +868,8 @@ const Index = () => {
       console.log('📊 WebSocket sensor_data received:', data);
 
       // Update ESP32 connection status based on sensor data
-      if (data.esp32_id === 'ESP32_TOP_002' || data.tank_type === 'top_tank') {
+      // Update ESP32 Top status - support both old and new device IDs  
+      if (data.esp32_id === 'TOP_TANK' || data.esp32_id === 'ESP32_TOP_001' || data.tank_type === 'top_tank') {
         setEsp32TopStatus(prev => ({
           ...prev,
           connected: data.connection_state === 'connected',
@@ -832,8 +880,8 @@ const Index = () => {
         }));
       }
 
-      // Update ESP32 Sump status
-      if (data.esp32_id === 'ESP32_SUMP_001' || data.esp32_id === 'ESP32_SUMP_002' || data.tank_type === 'sump_tank') {
+      // Update ESP32 Sump status - support both old and new device IDs
+      if (data.esp32_id === 'SUMP_TANK' || data.esp32_id === 'ESP32_SUMP_002' || data.tank_type === 'sump_tank') {
         setEsp32SumpStatus(prev => ({
           ...prev,
           connected: data.connection_state === 'connected',
@@ -951,7 +999,25 @@ const Index = () => {
 
   // PIN Settings state
   const [pinSettingsOpen, setPinSettingsOpen] = useState(false);
-  const [esp32ConfigOpen, setEsp32ConfigOpen] = useState(false);  const handleAIQuery = (query: string) => {
+  const [esp32ConfigOpen, setEsp32ConfigOpen] = useState(false);
+
+  // Device registration state with localStorage persistence
+  const [deviceRegistrationState, setDeviceRegistrationState] = useState(() => {
+    const saved = localStorage.getItem('deviceRegistrationState');
+    return saved ? JSON.parse(saved) : {
+      sumpTankRegistered: false,
+      topTankRegistered: false,
+      sumpTankApiKey: '',
+      sumpTankHmacSecret: '',
+      topTankApiKey: '',
+      topTankHmacSecret: ''
+    };
+  });
+
+  // Persist device registration state to localStorage
+  useEffect(() => {
+    localStorage.setItem('deviceRegistrationState', JSON.stringify(deviceRegistrationState));
+  }, [deviceRegistrationState]);  const handleAIQuery = (query: string) => {
     console.log('AI Query:', query);
     
     // Get current system data for AI processing
@@ -974,15 +1040,80 @@ const Index = () => {
     });
   };
 
+  // Debug function to test API calls
+  const handleDebugTest = async () => {
+    console.log('🔍 Starting debug test...');
+    try {
+      // Test 1: Direct fetch
+      console.log('🧪 Test 1: Direct fetch to /api/tanks');
+      const response = await fetch('http://localhost:3001/api/tanks');
+      console.log('📡 Direct fetch response status:', response.status);
+      console.log('📡 Direct fetch response ok:', response.ok);
+      const data = await response.json();
+      console.log('📡 Direct fetch data:', data);
+      
+      // Test 2: API service call
+      console.log('🧪 Test 2: apiService.getTanks()');
+      const tanks = await apiService.getTanks();
+      console.log('📡 API service data:', tanks);
+      
+      // Test 3: Update UI
+      if (tanks.length > 0) {
+        const totalLiters = tanks.reduce((sum, tank) => sum + tank.level_liters, 0);
+        console.log('🧪 Test 3: Setting total water level:', totalLiters);
+        setTotalWaterLevel(totalLiters);
+      }
+      
+      toast({
+        title: "Debug Test Complete",
+        description: "Check console for debug information",
+      });
+      
+    } catch (error) {
+      console.error('🔍 Debug test error:', error);
+      toast({
+        title: "Debug Test Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
   // Emergency stop function
-  const handleEmergencyStop = () => {
-    setMotorRunning(false);
-    setAutoMode(false);
-    toast({
-      title: "Emergency Stop Activated",
-      description: "Motor has been stopped and all automatic functions disabled for safety.",
-      variant: "destructive",
-    });
+  const handleEmergencyStop = async () => {
+    try {
+      console.log('🚨 Emergency stopping motor...');
+      const response = await fetch('http://localhost:3001/api/motor/emergency-stop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          device_id: 'SUMP_TANK',
+          reason: 'User initiated emergency stop'
+        }),
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        setMotorRunning(false);
+        setAutoMode(false);
+        toast({
+          title: "Emergency Stop Activated",
+          description: "Motor has been emergency stopped. System requires manual reset.",
+          variant: "destructive",
+        });
+      } else {
+        throw new Error(result.error || 'Emergency stop failed');
+      }
+    } catch (error) {
+      console.error('❌ Failed to emergency stop motor:', error);
+      toast({
+        title: "Emergency Stop Failed",
+        description: "Failed to emergency stop the motor. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   // Function to refresh ESP32 status is defined above
@@ -1080,6 +1211,38 @@ const Index = () => {
       toast({
         title: "Motor Stop Failed",
         description: "Failed to stop the motor. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleEmergencyReset = async () => {
+    try {
+      console.log('🔄 Resetting emergency state...');
+      const response = await fetch('http://localhost:3001/api/motor/emergency-reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          device_id: 'SUMP_TANK'
+        }),
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        toast({
+          title: "Emergency Reset Complete",
+          description: "System has been reset and normal operation resumed.",
+        });
+      } else {
+        throw new Error(result.error || 'Emergency reset failed');
+      }
+    } catch (error) {
+      console.error('❌ Failed to reset emergency state:', error);
+      toast({
+        title: "Emergency Reset Failed",
+        description: "Failed to reset emergency state. Please try again.",
         variant: "destructive",
       });
     }
@@ -1187,6 +1350,50 @@ const Index = () => {
         setPinModal(prev => ({ ...prev, isOpen: false }));
       }
     });
+  };
+
+  const requestPinForKeys = (deviceName: string, onSuccess: () => void) => {
+    if (isPinSessionValid()) {
+      // Session is valid, execute action directly
+      onSuccess();
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: 'View Device Keys',
+      description: `Enter PIN to authorize viewing keys for ${deviceName}.`,
+      actionType: 'esp32_save', // Reuse existing action type
+      onSuccess: () => {
+        updatePinSession();
+        onSuccess();
+        setPinModal(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
+  // Device registration handlers
+  const handleDeviceRegistration = (deviceType: 'sump' | 'top', apiKey: string, hmacSecret: string) => {
+    console.log('Device registration:', deviceType, 'API Key:', apiKey, 'HMAC Secret:', hmacSecret);
+    setDeviceRegistrationState(prev => ({
+      ...prev,
+      [`${deviceType}TankRegistered`]: true,
+      [`${deviceType}TankApiKey`]: apiKey,
+      [`${deviceType}TankHmacSecret`]: hmacSecret
+    }));
+  };
+
+  const isDeviceRegistered = (deviceType: 'sump' | 'top') => {
+    return Boolean(deviceRegistrationState[`${deviceType}TankRegistered` as keyof typeof deviceRegistrationState]);
+  };
+
+  const getDeviceKeys = (deviceType: 'sump' | 'top') => {
+    const keys = {
+      apiKey: deviceRegistrationState[`${deviceType}TankApiKey` as keyof typeof deviceRegistrationState] as string,
+      hmacSecret: deviceRegistrationState[`${deviceType}TankHmacSecret` as keyof typeof deviceRegistrationState] as string
+    };
+    console.log('Getting device keys for', deviceType, ':', keys);
+    return keys;
   };
 
   return (
@@ -1316,6 +1523,8 @@ const Index = () => {
         <MobileDashboard
           totalWaterLevel={totalWaterLevel}
           waterLevelChange={waterLevelChange}
+          sumpLevelPercentage={sumpLevelPercentage}
+          topLevelPercentage={topLevelPercentage}
           motorStatus={motorStatus}
           motorLastRun={motorLastRun}
           motorRuntime={motorRuntime}
@@ -1325,12 +1534,16 @@ const Index = () => {
           motorRunning={motorRunning}
           efficiency={efficiency}
           dailyUsage={dailyUsage}
-          alerts={alerts}
-          aiInsights={aiInsights}
+          alerts={alerts as any}
+          aiInsights={aiInsights as any}
           esp32TopStatus={esp32TopStatus}
           esp32SumpStatus={esp32SumpStatus}
           dailyConsumptionData={dailyConsumptionData}
           monthlyConsumptionData={monthlyConsumptionData}
+          deviceRegistrationState={deviceRegistrationState}
+          onDeviceRegistration={handleDeviceRegistration}
+          onRequestEsp32Connect={requestPinForEsp32Connect}
+          onRequestPinForKeys={requestPinForKeys}
           onToggleAutoMode={requestPinForAutoModeToggle}
           onMotorStart={requestPinForMotorStart}
           onMotorStop={requestPinForMotorStop}
@@ -1366,6 +1579,9 @@ const Index = () => {
                       'Waiting for tank data'
                     }
                   </p>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    DEBUG: totalWaterLevel={totalWaterLevel}, isLoading={isLoading.toString()}
+                  </div>
                 </>
               )}
             </CardContent>
@@ -1392,6 +1608,9 @@ const Index = () => {
                   <p className="text-xs text-muted-foreground mt-1">
                     {motorStatus === 'No Data' ? 'Waiting for motor data' : motorLastRun}
                   </p>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    DEBUG: motorStatus='{motorStatus}', motorLastRun='{motorLastRun}'
+                  </div>
                 </>
               )}
             </CardContent>
@@ -1494,13 +1713,23 @@ const Index = () => {
                 sensorHealth={esp32TopStatus.connected ? "online" : "offline"}
                 esp32Status={esp32TopStatus}
                 symbol="🏠"
+                floatSwitch={false}
+                motorRunning={motorRunning}
+                manualOverride={false}
                 onRequestEsp32Connect={requestPinForEsp32Connect}
                 initialMacAddress="6C:C8:40:4D:B8:3C"
-                initialIpAddress="192.168.0.234"
+                initialIpAddress="192.168.1.100"
                 onConfigChange={(config) => {
                   console.log('Top Tank ESP32 config updated:', config);
                 }}
+                isDeviceRegistered={isDeviceRegistered('top')}
+                deviceKeys={getDeviceKeys('top')}
+                onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('top', apiKey, hmacSecret)}
+                onRequestPinForKeys={requestPinForKeys}
               />
+              <div className="text-xs text-muted-foreground p-2 border-t">
+                DEBUG: topLevelPercentage = {topLevelPercentage}%
+              </div>
             </Card>
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
               <EnhancedTankMonitor
@@ -1511,13 +1740,23 @@ const Index = () => {
                 sensorHealth={esp32SumpStatus.connected ? "online" : "offline"}
                 esp32Status={esp32SumpStatus}
                 symbol="🕳️"
+                floatSwitch={false}
+                motorRunning={motorRunning}
+                manualOverride={false}
                 onRequestEsp32Connect={requestPinForEsp32Connect}
                 initialMacAddress="80:F3:DA:65:86:6C"
-                initialIpAddress="192.168.0.184"
+                initialIpAddress="192.168.1.101"
                 onConfigChange={(config) => {
                   console.log('Sump Tank ESP32 config updated:', config);
                 }}
+                isDeviceRegistered={isDeviceRegistered('sump')}
+                deviceKeys={getDeviceKeys('sump')}
+                onDeviceRegistration={(apiKey, hmacSecret) => handleDeviceRegistration('sump', apiKey, hmacSecret)}
+                onRequestPinForKeys={requestPinForKeys}
               />
+              <div className="text-xs text-muted-foreground p-2 border-t">
+                DEBUG: sumpLevelPercentage = {sumpLevelPercentage}%
+              </div>
             </Card>
           </div>
         </section>
@@ -1552,14 +1791,33 @@ const Index = () => {
                     maxRuntime: 60,
                     minOffTime: 15
                   }}
-                  onUpdateSettings={(newSettings) => {
-                    setMotorOnLevel(newSettings.autoStartLevel);
-                    setMotorOffLevel(newSettings.autoStopLevel);
-                    console.log('Motor thresholds updated:', newSettings);
-                    toast({
-                      title: "Motor Thresholds Updated",
-                      description: `Motor will start at ${newSettings.autoStartLevel}% and stop at ${newSettings.autoStopLevel}%.`,
-                    });
+                  onUpdateSettings={async (newSettings) => {
+                    try {
+                      // Save to backend
+                      await apiService.updateMotorSettings({
+                        auto_start_level: newSettings.autoStartLevel,
+                        auto_stop_level: newSettings.autoStopLevel,
+                        max_runtime_minutes: newSettings.maxRuntime,
+                        min_off_time_minutes: newSettings.minOffTime
+                      });
+                      
+                      // Update local state
+                      setMotorOnLevel(newSettings.autoStartLevel);
+                      setMotorOffLevel(newSettings.autoStopLevel);
+                      
+                      console.log('Motor thresholds updated:', newSettings);
+                      toast({
+                        title: "Motor Thresholds Saved",
+                        description: `Motor will start at ${newSettings.autoStartLevel}% and stop at ${newSettings.autoStopLevel}%.`,
+                      });
+                    } catch (error) {
+                      console.error('Failed to save motor settings:', error);
+                      toast({
+                        variant: "destructive",
+                        title: "Settings Save Failed",
+                        description: "Could not save motor threshold settings. Please try again.",
+                      });
+                    }
                   }}
                 />
               </Card>
@@ -1593,6 +1851,24 @@ const Index = () => {
                   >
                     <StopCircle className="w-4 h-4 mr-2" />
                     Emergency Stop
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full bg-orange-500/10 hover:bg-orange-500/20 border-orange-500/30 text-orange-400 hover:text-orange-300"
+                    onClick={handleEmergencyReset}
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Reset Emergency
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/30 text-blue-400 hover:text-blue-300"
+                    onClick={handleDebugTest}
+                  >
+                    <Settings className="w-4 h-4 mr-2" />
+                    Debug Test
                   </Button>
                   <Button 
                     variant="outline" 
@@ -1762,7 +2038,7 @@ const Index = () => {
             
             <Card className="bg-card/60 backdrop-blur-sm border-border/50">
               <AIInsightsPanel
-                insights={aiInsights}
+                insights={aiInsights as any}
                 onQuerySubmit={handleAIQuery}
                 queryResponse={queryResponse}
                 className="bg-card/60 backdrop-blur-sm border-border/50"

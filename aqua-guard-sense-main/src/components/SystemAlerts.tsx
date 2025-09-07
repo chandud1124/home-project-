@@ -14,7 +14,7 @@ interface SystemAlert {
   id: string;
   type: 'info' | 'warning' | 'error' | 'success';
   message: string;
-  timestamp: Date;
+  timestamp: string | Date;
   resolved?: boolean;
 }
 
@@ -80,7 +80,7 @@ export const SystemAlerts = ({ alerts, className }: SystemAlertsProps) => {
                 <span className="flex-1 text-xs sm:text-sm mb-2 sm:mb-0">{alert.message}</span>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">
-                    {alert.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                   {alert.resolved && (
                     <Badge variant="outline" className="text-xs">

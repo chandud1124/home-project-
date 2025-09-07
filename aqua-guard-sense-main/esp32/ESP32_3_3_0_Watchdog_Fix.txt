@@ -1,0 +1,37 @@
+// ========== WATCHDOG FIX FOR ESP32 ARDUINO CORE 3.3.0 ==========
+// Replace the old setupWatchdog() function with this fixed version:
+
+void setupWatchdog() {
+  // Fixed for ESP32 3.3.0 - use proper config structure instead of direct parameters
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = WATCHDOG_TIMEOUT_S * 1000,  // Convert seconds to milliseconds
+    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,  // Enable for all cores
+    .trigger_panic = true  // Trigger panic on timeout
+  };
+  
+  // Initialize with config structure
+  esp_task_wdt_init(&wdt_config);
+  esp_task_wdt_add(NULL);  // Add current task to watchdog
+  
+  Serial.printf("⏰ Watchdog configured: %d seconds timeout\n", WATCHDOG_TIMEOUT_S);
+}
+
+// ========== SUMMARY OF CHANGES MADE ==========
+/*
+The main issue in ESP32 Arduino Core 3.3.0 is that esp_task_wdt_init() 
+now requires a configuration structure instead of direct parameters.
+
+OLD CODE (causing error):
+  esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true);
+
+NEW CODE (fixed):
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = WATCHDOG_TIMEOUT_S * 1000,
+    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
+    .trigger_panic = true
+  };
+  esp_task_wdt_init(&wdt_config);
+
+This change is needed in BOTH ESP32 files to make them compatible with 
+Arduino ESP32 Core 3.3.0.
+*/

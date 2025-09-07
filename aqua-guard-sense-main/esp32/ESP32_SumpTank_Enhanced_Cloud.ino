@@ -23,6 +23,7 @@
 
 // ========== LIBRARIES ==========
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
@@ -30,6 +31,9 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <time.h>
+
+// Type alias for compatibility
+typedef WiFiClientSecure NetworkClientSecure;
 
 // ========== DEVICE CONFIGURATION ==========
 #define DEVICE_ID "SUMP_TANK"
@@ -48,6 +52,7 @@
 // ========== CLOUD CONFIGURATION (SUPABASE) ==========
 #define CLOUD_ENABLED true
 #define SUPABASE_URL "https://dwcouaacpqipvvsxiygo.supabase.co"
+#define SUPABASE_HOST "dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
 
 // ========== AUTHENTICATION ==========
@@ -104,7 +109,7 @@
 // ========== SAFETY & ERROR HANDLING ==========
 #define MAX_WIFI_RETRIES 3
 #define MAX_BACKEND_RETRIES 3
-#define MOTOR_MAX_RUNTIME_MS 1800000  // 30 minutes max motor runtime
+#define MAX_MOTOR_RUNTIME_MS 1800000  // 30 minutes max motor runtime
 #define MOTOR_COOLDOWN_MS 300000      // 5 minutes cooldown between runs
 
 // ========== GLOBAL VARIABLES ==========
@@ -141,6 +146,8 @@ unsigned long lastPanicCheck = 0;
 unsigned long systemStartTime = 0;
 
 // Switch states
+bool manualSwitchPressed = false;
+bool modeSwitchPressed = false;
 bool lastMotorSwitchState = HIGH;
 bool lastModeSwitchState = HIGH;
 
@@ -156,7 +163,43 @@ int cloudRetryCount = 0;
 int heartbeatMissCount = 0;
 
 // Function prototypes
+void initializePins();
+void setupWatchdog();
+void initializeWiFi();
+void setupNTP();
+void setupLocalServer();
+void maintainWiFiConnection();
+bool checkBackendAvailability();
+void checkCloudAvailability();
+void syncWithCloud();
+void readSensors();
+void sendHeartbeat();
 void sendCloudHeartbeat();
+void checkPendingCommands();
+void checkPendingCloudCommands();
+void acknowledgeCommand(String commandId, String status);
+void acknowledgeCloudCommand(String commandId, String status);
+void processMotorCommand(String commandId, ArduinoJson::V742PB22::JsonObject payload);
+void processEmergencyStop(String commandId, ArduinoJson::V742PB22::JsonObject payload);
+void processEmergencyReset(String commandId, ArduinoJson::V742PB22::JsonObject payload);
+void handleSwitches();
+void autoMotorControl();
+void controlMotor(bool start);
+void checkMotorSafety();
+void stopMotorImmediate(String reason);
+void checkDailyRestart();
+void checkPanicConditions(unsigned long currentMillis);
+void reportPanicToBackend(String reason);
+void reportPanicToCloud(String reason);
+void reportScheduledRestart();
+void updateLEDs();
+void handleBuzzer();
+void reportSystemStatus();
+void sendSensorDataToBackend();
+String generateHMACSignature(String payload, String timestamp);
+void handleHTTPRoot();
+void handleHTTPStatus();
+void handleHTTPMotor();
 
 // ========== SETUP ==========
 void setup() {
@@ -258,6 +301,9 @@ void loop() {
     lastHeartbeat = currentMillis;
   }
   
+  // Feed watchdog regularly
+  esp_task_wdt_reset();
+  
   // Check for pending commands from backend and cloud
   if (wifiConnected && 
       currentMillis - lastCommandCheck >= COMMAND_CHECK_INTERVAL) {
@@ -335,28 +381,50 @@ void initializePins() {
 }
 
 void setupWatchdog() {
+  // Check if watchdog is already initialized
+  if (esp_task_wdt_deinit() == ESP_OK) {
+    Serial.println("⚠️ Watchdog was already initialized - resetting");
+  }
+  
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = WATCHDOG_TIMEOUT_S * 1000,
     .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
-    .trigger_panic = true
+    .trigger_panic = false  // Don't trigger panic, just reset
   };
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);
-  Serial.printf("⏰ Watchdog configured: %d seconds timeout\n", WATCHDOG_TIMEOUT_S);
+  
+  esp_err_t wdt_result = esp_task_wdt_init(&wdt_config);
+  if (wdt_result == ESP_OK) {
+    esp_task_wdt_add(NULL);
+    Serial.printf("⏰ Watchdog configured: %d seconds timeout\n", WATCHDOG_TIMEOUT_S);
+  } else {
+    Serial.printf("❌ Watchdog initialization failed: %d\n", wdt_result);
+  }
 }
 
 void initializeWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   Serial.printf("🔗 Connecting to WiFi: %s", WIFI_SSID);
   
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
     delay(500);
     Serial.print(".");
     attempts++;
-    esp_task_wdt_reset(); // Feed watchdog during connection
+    
+    // Feed watchdog every few attempts
+    if (attempts % 3 == 0) {
+      esp_task_wdt_reset();
+    }
+    
+    // If taking too long, break out to prevent watchdog reset
+    if (attempts >= 25) {
+      Serial.print("\n⚠️ WiFi connection taking longer than expected, continuing with startup...");
+      break;
+    }
   }
   
   if (WiFi.status() == WL_CONNECTED) {
@@ -368,7 +436,11 @@ void initializeWiFi() {
   } else {
     wifiConnected = false;
     Serial.println("\n❌ WiFi Connection Failed - Will retry later");
+    Serial.println("💡 System will continue operating, WiFi will retry automatically");
   }
+  
+  // Final watchdog feed after WiFi attempt
+  esp_task_wdt_reset();
 }
 
 void setupNTP() {
@@ -900,24 +972,6 @@ void sendCloudHeartbeat() {
     Serial.printf("❌ Failed to connect to Supabase for heartbeat (Miss count: %d)\n", heartbeatMissCount);
   }
 }
-      Serial.printf("❌ Error response: %s\n", errorResponse.c_str());
-      
-      // If backend has database issues, don't mark it completely unavailable
-      // Just continue trying with increased interval
-      if (httpCode == 500 && errorResponse.indexOf("db.collection") > -1) {
-        Serial.println("🔧 Backend database issue detected - continuing with reduced frequency");
-        backendRetryCount = MAX_BACKEND_RETRIES - 1; // Keep trying but less frequently
-      } else if (backendRetryCount >= MAX_BACKEND_RETRIES) {
-        backendAvailable = false;
-        Serial.println("🔌 Backend marked as unavailable");
-      }
-    }
-    
-    http.end();
-  } else {
-    Serial.println("❌ Failed to initialize HTTP client for heartbeat");
-  }
-}
 
 String generateHMACSignature(String payload, String timestamp) {
   String message = String(DEVICE_ID) + payload + timestamp;
@@ -1149,46 +1203,46 @@ void acknowledgeCommand(String commandId, String status) {
 
 // ========== PANIC MODE & RESTART LOGIC ==========
 void checkPanicConditions(unsigned long currentMillis) {
-  // Only check panic every 10 seconds to avoid constant checking
-  if (currentMillis - lastPanicCheck < 10000) return;
+  // Only check panic every 30 seconds to avoid constant checking
+  if (currentMillis - lastPanicCheck < 30000) return;
   lastPanicCheck = currentMillis;
+  
+  // Feed watchdog during panic check
+  esp_task_wdt_reset();
   
   bool shouldPanic = false;
   String panicReason = "";
   
-  // Check 1: Backend unresponsive for too long (only if backend was available)
-  if (BACKEND_ENABLED && backendAvailable && lastBackendResponse > 0 && 
-      currentMillis - lastBackendResponse > PANIC_THRESHOLD_MS) {
-    shouldPanic = true;
-    panicReason = "Backend unresponsive for " + String(PANIC_THRESHOLD_MS/1000) + " seconds";
-  }
+  // DISABLED: Backend unresponsive (WiFi issues shouldn't cause panic)
+  // WiFi connectivity issues should not cause system restarts
   
-  // TEMPORARILY DISABLE sensor-based panic to avoid restart loops
-  // Check 2: Critical hardware failure (sensor always reading 0 or max)
-  /*
-  static int sensorErrorCount = 0;
-  if (currentLevel == 0.0 || currentLevel >= 99.9) {
-    sensorErrorCount++;
-    if (sensorErrorCount > 10) { // 10 consecutive bad readings
-      shouldPanic = true;
-      panicReason = "Sensor hardware failure detected";
-    }
-  } else {
-    sensorErrorCount = 0;
-  }
-  */
-  
-  // Check 3: Motor stuck on for too long
+  // Check 1: Motor stuck on for too long (CRITICAL safety issue)
   if (motorRunning && motorStartTime > 0 && 
-      currentMillis - motorStartTime > MOTOR_MAX_RUNTIME_MS) {
+      currentMillis - motorStartTime > MAX_MOTOR_RUNTIME_MS) {
     shouldPanic = true;
     panicReason = "Motor running too long - possible mechanical failure";
   }
   
-  // Check 4: Low memory condition
-  if (ESP.getFreeHeap() < 10000) { // Less than 10KB free
+  // Check 2: Critical memory shortage 
+  if (ESP.getFreeHeap() < 5000) { // Less than 5KB free (very critical)
     shouldPanic = true;
     panicReason = "Critical memory shortage";
+  }
+  
+  // Check 3: Float switch stuck (safety concern)
+  static bool lastFloatState = floatSwitchState;
+  static unsigned long floatStateChangeTime = currentMillis;
+  if (floatSwitchState != lastFloatState) {
+    floatStateChangeTime = currentMillis;
+    lastFloatState = floatSwitchState;
+  }
+  
+  // If motor has been running for 20+ minutes and float switch hasn't changed
+  if (motorRunning && motorStartTime > 0 && 
+      currentMillis - motorStartTime > 1200000 &&  // 20 minutes
+      currentMillis - floatStateChangeTime > 1200000) {
+    shouldPanic = true;
+    panicReason = "Float switch appears stuck - safety concern";
   }
   
   if (shouldPanic && !systemInPanic) {
@@ -1336,6 +1390,9 @@ void reportScheduledRestart() {
 
 // ========== WIFI MANAGEMENT (NO RESTART ON DISCONNECTION) ==========
 void maintainWiFiConnection() {
+  // Feed watchdog at start
+  esp_task_wdt_reset();
+  
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiConnected) {
       Serial.println("📡 WiFi disconnected");
@@ -1348,15 +1405,18 @@ void maintainWiFiConnection() {
     if (wifiRetryCount <= MAX_WIFI_RETRIES) {
       Serial.printf("🔄 WiFi reconnect attempt %d/%d\n", wifiRetryCount, MAX_WIFI_RETRIES);
       WiFi.disconnect();
-      delay(1000);
+      delay(500);  // Reduced delay
+      esp_task_wdt_reset();  // Feed before reconnection attempt
       WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
       
-      // Wait up to 10 seconds for connection
+      // Wait up to 10 seconds for connection with frequent watchdog feeds
       int attempts = 0;
-      while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      while (WiFi.status() != WL_CONNECTED && attempts < 15) {  // Reduced attempts
         delay(500);
         attempts++;
-        esp_task_wdt_reset();
+        if (attempts % 2 == 0) {  // Feed watchdog every second
+          esp_task_wdt_reset();
+        }
       }
       
       if (WiFi.status() == WL_CONNECTED) {
@@ -1364,11 +1424,21 @@ void maintainWiFiConnection() {
         wifiRetryCount = 0;
         Serial.println("✅ WiFi reconnected!");
         // Check backend and cloud availability after WiFi reconnection
+        esp_task_wdt_reset();
         checkBackendAvailability();
         checkCloudAvailability();
+      } else {
+        Serial.println("⚠️ WiFi reconnect attempt timed out");
       }
     } else {
       Serial.println("❌ WiFi reconnection failed - operating in local mode only");
+      // Reset retry count after some time to allow future attempts
+      static unsigned long lastRetryReset = 0;
+      if (millis() - lastRetryReset > 300000) {  // Reset every 5 minutes
+        wifiRetryCount = 0;
+        lastRetryReset = millis();
+        Serial.println("🔄 WiFi retry count reset");
+      }
     }
   } else if (!wifiConnected) {
     wifiConnected = true;
@@ -1532,7 +1602,7 @@ void checkMotorSafety() {
   if (motorRunning && motorStartTime > 0) {
     unsigned long runtime = millis() - motorStartTime;
     
-    if (runtime > MOTOR_MAX_RUNTIME_MS) {
+    if (runtime > MAX_MOTOR_RUNTIME_MS) {
       digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
       motorRunning = false;
       Serial.println("🚨 EMERGENCY MOTOR STOP - Max runtime exceeded");
@@ -1685,5 +1755,5 @@ void reportSystemStatus() {
     Serial.printf("Current Time: %02d:%02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   }
   
-  Serial.println("====================================================\n");
 }
+

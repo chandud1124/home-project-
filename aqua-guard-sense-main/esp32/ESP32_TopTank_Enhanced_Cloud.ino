@@ -20,12 +20,16 @@
 
 // ========== LIBRARIES ==========
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <mbedtls/md.h>
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <time.h>
+
+// Type alias for compatibility
+typedef WiFiClientSecure NetworkClientSecure;
 
 // ========== DEVICE CONFIGURATION ==========
 #define DEVICE_ID "TOP_TANK"
@@ -48,6 +52,7 @@
 // ========== CLOUD CONFIGURATION (SUPABASE) ==========
 #define CLOUD_ENABLED true
 #define SUPABASE_URL "https://dwcouaacpqipvvsxiygo.supabase.co"
+#define SUPABASE_HOST "dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
 
 // ========== AUTHENTICATION ==========
@@ -129,7 +134,48 @@ int cloudRetryCount = 0;
 int heartbeatMissCount = 0;
 
 // Function prototypes
+void initializePins();
+void setupWatchdog();
+void initializeWiFi();
+void setupNTP();
+void maintainWiFiConnection();
+bool checkBackendAvailability();
+void controlSumpMotor();
 void sendCloudHeartbeat();
+void sendCloudReading(float level, float volume, float percentage);
+void checkCloudCommands();
+void sendToBackend(String endpoint, String data);
+void sendDirectToSumpESP32(String command);
+bool checkSumpESP32Availability();
+float readUltrasonicDistance();
+float calculateWaterLevel(float distance);
+float calculateVolume(float level);
+void checkDailyRestart();
+void handlePanicMode();
+void performSystemRestart(String reason);
+void updateStatusIndicators();
+void blinkStatusLed();
+void soundBuzzer(int ringCount);
+void feedWatchdog();
+bool isValidSensorReading(float distance);
+String createHMACAuth(String data);
+String urlEncode(String str);
+void checkPanicConditions(unsigned long currentMillis);
+void checkPendingCommands();
+void processMotorControlCommand(String commandId, ArduinoJson::V742PB22::JsonObject payload);
+void acknowledgeCommand(String commandId, String status);
+void sendMotorCommandToSump(bool start);
+void updateLED();
+void handleBuzzer();
+void reportSystemStatus();
+void sendSensorDataToBackend();
+void reportPanicToBackend(String reason);
+void reportPanicToCloud(String reason);
+void reportScheduledRestart();
+void handleStatusLED();
+String generateHMACSignature(String payload, String timestamp);
+void checkCloudAvailability();
+void syncWithCloud();
 
 // ========== SETUP ==========
 void setup() {
@@ -741,15 +787,6 @@ void sendCloudHeartbeat() {
     Serial.printf("❌ Failed to connect to Supabase for heartbeat (Miss count: %d)\n", heartbeatMissCount);
   }
 }
-        Serial.println("🔌 Backend marked as unavailable");
-      }
-    }
-    
-    http.end();
-  } else {
-    Serial.println("❌ Failed to initialize HTTP client for heartbeat");
-  }
-}
 
 String generateHMACSignature(String payload, String timestamp) {
   String message = String(DEVICE_ID) + payload + timestamp;
@@ -874,10 +911,10 @@ void acknowledgeCommand(String commandId, String status) {
 }
 
 // ========== SUMP ESP32 COMMUNICATION ==========
-void checkSumpESP32Availability() {
+bool checkSumpESP32Availability() {
   if (!wifiConnected) {
     sumpESP32Available = false;
-    return;
+    return false;
   }
   
   HTTPClient http;
@@ -904,6 +941,8 @@ void checkSumpESP32Availability() {
   } else {
     sumpESP32Available = false;
   }
+  
+  return sumpESP32Available;
 }
 
 void controlSumpMotor() {
@@ -1355,4 +1394,210 @@ void reportSystemStatus() {
   }
   
   Serial.println("======================================================\n");
+}
+
+// ========== MISSING FUNCTION IMPLEMENTATIONS ==========
+
+float readUltrasonicDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30ms timeout
+  
+  if (duration == 0) {
+    Serial.println("⚠️ Ultrasonic sensor timeout");
+    return -1;
+  }
+  
+  float distance = duration * 0.034 / 2;
+  return distance;
+}
+
+float calculateWaterLevel(float distance) {
+  if (distance < 0 || distance > (TANK_HEIGHT_CM + SENSOR_OFFSET_CM)) {
+    return -1; // Invalid reading
+  }
+  
+  float waterHeight = (TANK_HEIGHT_CM + SENSOR_OFFSET_CM) - distance;
+  if (waterHeight < 0) waterHeight = 0;
+  if (waterHeight > TANK_HEIGHT_CM) waterHeight = TANK_HEIGHT_CM;
+  
+  return (waterHeight / TANK_HEIGHT_CM) * 100.0;
+}
+
+float calculateVolume(float level) {
+  if (level < 0) return 0;
+  return (level / 100.0) * TANK_CAPACITY_LITERS;
+}
+
+void sendCloudReading(float level, float volume, float percentage) {
+  if (!CLOUD_ENABLED || !cloudAvailable) return;
+  
+  WiFiClientSecure client;
+  client.setInsecure();
+  
+  if (client.connect(SUPABASE_HOST, 443)) {
+    DynamicJsonDocument doc(512);
+    doc["device_id"] = DEVICE_ID;
+    doc["tank_level"] = level;
+    doc["volume_liters"] = volume;
+    doc["level_percentage"] = percentage;
+    doc["timestamp"] = "now()";
+    doc["motor_running"] = lastMotorCommand;
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    String request = "POST /rest/v1/tank_readings HTTP/1.1\r\n";
+    request += "Host: " + String(SUPABASE_HOST) + "\r\n";
+    request += "apikey: " + String(SUPABASE_ANON_KEY) + "\r\n";
+    request += "Authorization: Bearer " + String(SUPABASE_ANON_KEY) + "\r\n";
+    request += "Content-Type: application/json\r\n";
+    request += "Prefer: return=minimal\r\n";
+    request += "Content-Length: " + String(payload.length()) + "\r\n";
+    request += "Connection: close\r\n\r\n";
+    request += payload;
+    
+    client.print(request);
+    client.stop();
+  }
+}
+
+void checkCloudCommands() {
+  checkPendingCloudCommands();
+}
+
+void sendToBackend(String endpoint, String data) {
+  if (!BACKEND_ENABLED || !backendAvailable) return;
+  
+  HTTPClient http;
+  String url = String(BACKEND_USE_HTTPS ? "https" : "http") + "://" + BACKEND_HOST + ":" + BACKEND_PORT + endpoint;
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-device-id", DEVICE_ID);
+  http.addHeader("x-api-key", DEVICE_API_KEY);
+  
+  int httpResponseCode = http.POST(data);
+  String response = http.getString();
+  http.end();
+  
+  if (httpResponseCode == 200) {
+    lastBackendResponse = millis();
+  }
+}
+
+void sendDirectToSumpESP32(String command) {
+  HTTPClient http;
+  String url = "http://" + String(SUMP_ESP32_IP) + ":" + String(SUMP_ESP32_PORT) + "/motor";
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  
+  int httpResponseCode = http.POST(command);
+  http.end();
+  
+  sumpESP32Available = (httpResponseCode == 200);
+}
+
+void handlePanicMode() {
+  if (systemInPanic) {
+    Serial.println("🚨 PANIC MODE ACTIVE - System will restart soon");
+    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(200);
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+}
+
+void performSystemRestart(String reason) {
+  Serial.printf("🔄 System restart: %s\n", reason.c_str());
+  Serial.flush();
+  ESP.restart();
+}
+
+void updateStatusIndicators() {
+  handleStatusLED();
+  handleBuzzer();
+}
+
+void blinkStatusLed() {
+  digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+}
+
+void soundBuzzer(int ringCount) {
+  for (int i = 0; i < ringCount; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(200);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(200);
+  }
+}
+
+void feedWatchdog() {
+  esp_task_wdt_reset();
+}
+
+bool isValidSensorReading(float distance) {
+  return (distance > 0 && distance < (TANK_HEIGHT_CM + SENSOR_OFFSET_CM + 10));
+}
+
+String createHMACAuth(String data) {
+  // HMAC authentication implementation
+  byte hmacResult[32];
+  mbedtls_md_context_t ctx;
+  mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+  
+  const size_t messageLength = data.length();
+  const size_t keyLength = strlen(DEVICE_HMAC_SECRET);
+  
+  mbedtls_md_init(&ctx);
+  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 1);
+  mbedtls_md_hmac_starts(&ctx, (const unsigned char*)DEVICE_HMAC_SECRET, keyLength);
+  mbedtls_md_hmac_update(&ctx, (const unsigned char*)data.c_str(), messageLength);
+  mbedtls_md_hmac_finish(&ctx, hmacResult);
+  mbedtls_md_free(&ctx);
+  
+  String hmacString = "";
+  for (int i = 0; i < 32; i++) {
+    char hex[3];
+    sprintf(hex, "%02x", (int)hmacResult[i]);
+    hmacString += hex;
+  }
+  
+  return hmacString;
+}
+
+String urlEncode(String str) {
+  String encodedString = "";
+  char c;
+  char code0;
+  char code1;
+  char code2;
+  for (int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+    if (c == ' ') {
+      encodedString += '+';
+    } else if (isalnum(c)) {
+      encodedString += c;
+    } else {
+      code1 = (c & 0xf) + '0';
+      if ((c & 0xf) > 9) {
+        code1 = (c & 0xf) - 10 + 'A';
+      }
+      c = (c >> 4) & 0xf;
+      code0 = c + '0';
+      if (c > 9) {
+        code0 = c - 10 + 'A';
+      }
+      code2 = '\0';
+      encodedString += '%';
+      encodedString += code0;
+      encodedString += code1;
+    }
+  }
+  return encodedString;
 }

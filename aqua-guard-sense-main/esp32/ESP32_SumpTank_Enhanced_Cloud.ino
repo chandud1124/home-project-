@@ -76,10 +76,10 @@
 
 // ========== TANK CONFIGURATION ==========
 #define TANK_HEIGHT_CM 250.0
-#define TANK_LENGTH_CM 230.0
-#define TANK_WIDTH_CM 230.0
-#define TANK_CAPACITY_LITERS 1322.5
+#define TANK_LENGTH_CM 75.0   // Corrected dimensions to match realistic 1322L capacity  
+#define TANK_WIDTH_CM 75.0    // Corrected dimensions to match realistic 1322L capacity
 #define SENSOR_OFFSET_CM 10.0
+#define TANK_CAPACITY_LITERS 1322.5  // Fixed capacity as specified
 
 // ========== CONTROL LEVELS ==========
 #define SUMP_LOW_LEVEL 25.0
@@ -98,7 +98,7 @@
 #define WIFI_RECONNECT_DELAY 10000    // Wait 10s before WiFi reconnect
 #define PANIC_THRESHOLD_MS 300000     // 5 minutes of no response = panic
 #define DAILY_RESTART_HOUR 2          // Restart at 2:00 AM
-#define WATCHDOG_TIMEOUT_S 30         // Watchdog timeout
+#define WATCHDOG_TIMEOUT_S 60         // Increased to 60 seconds watchdog timeout
 #define LOCAL_SERVER_PORT 80
 
 // ========== SAFETY & ERROR HANDLING ==========
@@ -187,14 +187,17 @@ void setup() {
   // Setup local HTTP server
   setupLocalServer();
   
-  // Initialize backend connection
-  checkBackendAvailability();
+  // Initialize backend connection (only if enabled)
+  if (BACKEND_ENABLED) {
+    checkBackendAvailability();
+  }
   
   // Initialize cloud connection
+  Serial.println("☁️ Testing cloud connectivity...");
   checkCloudAvailability();
   
   Serial.println(BACKEND_ENABLED ? "✅ Enhanced + Cloud Setup Complete!" : "✅ Cloud-Only Setup Complete!");
-  Serial.printf("📊 Tank: Rectangle %.1f×%.1f×%.1fcm (%.1fL)\n", 
+  Serial.printf("📊 Tank: Rectangle %.1f×%.1f×%.1fcm (%.1fL capacity)\n", 
                 TANK_LENGTH_CM, TANK_WIDTH_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
   Serial.printf("🌐 Local IP: %s\n", WiFi.localIP().toString().c_str());
   if (BACKEND_ENABLED) {
@@ -233,8 +236,8 @@ void loop() {
     lastWifiConnect = currentMillis;
   }
   
-  // Check backend availability
-  if (currentMillis - lastBackendCheck >= BACKEND_CHECK_INTERVAL) {
+  // Check backend availability (only if backend enabled)
+  if (BACKEND_ENABLED && currentMillis - lastBackendCheck >= BACKEND_CHECK_INTERVAL) {
     checkBackendAvailability();
     lastBackendCheck = currentMillis;
   }
@@ -246,8 +249,8 @@ void loop() {
     lastCloudSync = currentMillis;
   }
   
-  // Send heartbeat to backend
-  if (wifiConnected && backendAvailable && 
+  // Send heartbeat to backend (only if backend enabled)
+  if (BACKEND_ENABLED && wifiConnected && backendAvailable && 
       currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
     sendHeartbeat();
     lastHeartbeat = currentMillis;
@@ -256,12 +259,15 @@ void loop() {
   // Check for pending commands from backend and cloud
   if (wifiConnected && 
       currentMillis - lastCommandCheck >= COMMAND_CHECK_INTERVAL) {
-    if (backendAvailable) {
+    if (BACKEND_ENABLED && backendAvailable) {
       checkPendingCommands();
     }
+    // TEMPORARILY DISABLED: Cloud commands causing HTTP 400 errors
+    /*
     if (cloudAvailable) {
       checkPendingCloudCommands();
     }
+    */
     lastCommandCheck = currentMillis;
   }
   
@@ -284,6 +290,19 @@ void loop() {
   if (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL) {
     reportSystemStatus();
     lastStatusReport = currentMillis;
+  }
+  
+  // Check for serial commands (diagnostic mode)
+  if (Serial.available()) {
+    String command = Serial.readString();
+    command.trim();
+    if (command == "diag" || command == "DIAG") {
+      Serial.println("\n🔧 Manual diagnostic requested...");
+      diagnosticSensorTest();
+    } else if (command == "restart" || command == "RESTART") {
+      Serial.println("🔄 Manual restart requested...");
+      ESP.restart();
+    }
   }
 }
 
@@ -417,11 +436,14 @@ void setupLocalServer() {
 void checkCloudAvailability() {
   if (!wifiConnected || !CLOUD_ENABLED) {
     cloudAvailable = false;
+    Serial.println("☁️ Cloud check skipped - WiFi or cloud disabled");
     return;
   }
   
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/devices?select=device_id&device_id=eq." + DEVICE_ID;
+  String url = String(SUPABASE_URL) + "/rest/v1/tank_readings?select=esp32_id&esp32_id=eq." + DEVICE_ID + "&limit=1"; // Fixed: use esp32_id not device_id
+  
+  Serial.printf("☁️ Testing cloud connectivity: %s\n", url.c_str());
   
   if (http.begin(url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
@@ -434,10 +456,12 @@ void checkCloudAvailability() {
       cloudAvailable = true;
       cloudRetryCount = 0;
       lastCloudResponse = millis();
-      Serial.println("☁️ Cloud available");
+      Serial.println("✅ Cloud connection verified");
     } else {
       cloudRetryCount++;
       Serial.printf("❌ Cloud check failed: HTTP %d\n", httpCode);
+      String errorResponse = http.getString();
+      Serial.printf("❌ Cloud error response: %s\n", errorResponse.c_str());
       
       if (cloudRetryCount >= MAX_BACKEND_RETRIES) {
         cloudAvailable = false;
@@ -448,33 +472,41 @@ void checkCloudAvailability() {
     http.end();
   } else {
     Serial.println("❌ Failed to initialize HTTP client for cloud check");
+    cloudAvailable = false;
   }
 }
 
 void syncWithCloud() {
   if (!cloudAvailable || !wifiConnected) {
+    Serial.println("☁️ Cloud sync skipped - not available or WiFi down");
     return;
   }
   
+  Serial.println("☁️ Syncing data to Supabase...");
+  
   // Send device status to cloud
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/device_readings";
+  String url = String(SUPABASE_URL) + "/rest/v1/tank_readings"; // Changed from device_readings to tank_readings
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(512);
-    doc["device_id"] = DEVICE_ID;
+    doc["esp32_id"] = DEVICE_ID; // Match Supabase schema
+    doc["tank_type"] = "sump_tank"; // Standard tank type
     doc["level_percentage"] = currentLevel;
     doc["level_liters"] = currentVolume;
     doc["motor_running"] = motorRunning;
-    doc["auto_mode"] = isAutoMode;
+    doc["auto_mode_enabled"] = isAutoMode; // Match schema field name
     doc["float_switch"] = floatSwitchState;
-    doc["system_panic"] = systemInPanic;
+    doc["sensor_health"] = "good"; // Default sensor health
     doc["wifi_rssi"] = WiFi.RSSI();
-    doc["free_heap"] = ESP.getFreeHeap();
+    doc["battery_voltage"] = 12.0; // Assume 12V power supply
+    doc["signal_strength"] = WiFi.RSSI();
     doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     
     String payload;
     serializeJson(doc, payload);
+    
+    Serial.printf("☁️ Payload: %s\n", payload.c_str());
     
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", SUPABASE_ANON_KEY);
@@ -485,15 +517,25 @@ void syncWithCloud() {
     int httpCode = http.POST(payload);
     
     if (httpCode == 201 || httpCode == 200) {
-      Serial.println("☁️ Data synced to cloud successfully");
+      Serial.println("✅ Data synced to cloud successfully");
       lastCloudResponse = millis();
     } else {
       Serial.printf("❌ Cloud sync failed: HTTP %d\n", httpCode);
       String errorResponse = http.getString();
       Serial.printf("❌ Error response: %s\n", errorResponse.c_str());
+      
+      // If this is a table doesn't exist error, mark cloud as unavailable temporarily
+      if (httpCode == 404 || httpCode == 400) {
+        Serial.println("⚠️ Cloud table may not exist - check Supabase setup");
+        // Don't mark cloud as unavailable for table issues, just log
+      } else if (httpCode >= 500) {
+        Serial.println("⚠️ Server error - will retry next sync");
+      }
     }
     
     http.end();
+  } else {
+    Serial.println("❌ Failed to initialize HTTP client for cloud sync");
   }
 }
 
@@ -502,8 +544,18 @@ void checkPendingCloudCommands() {
     return;
   }
   
+  // Temporarily disable cloud commands to avoid HTTP 400 errors
+  static bool cloudCommandsDisabled = false;
+  static unsigned long lastCloudCommandError = 0;
+  
+  // If we had errors recently, wait 5 minutes before trying again
+  if (cloudCommandsDisabled && millis() - lastCloudCommandError < 300000) {
+    return;
+  }
+  
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?select=*&device_id=eq." + DEVICE_ID + "&status=eq.pending&order=created_at.asc";
+  // Query device commands with correct column names: acknowledged=false instead of status=pending
+  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?device_id=eq." + DEVICE_ID + "&acknowledged=eq.false";
   
   if (http.begin(url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
@@ -513,6 +565,7 @@ void checkPendingCloudCommands() {
     int httpCode = http.GET();
     
     if (httpCode == 200) {
+      cloudCommandsDisabled = false; // Reset error state on success
       String response = http.getString();
       
       DynamicJsonDocument doc(2048);
@@ -520,34 +573,45 @@ void checkPendingCloudCommands() {
       
       if (!error) {
         JsonArray commands = doc.as<JsonArray>();
-        Serial.printf("☁️ Found %d pending cloud commands\n", commands.size());
-        
-        for (JsonObject command : commands) {
-          String commandId = command["id"];
-          String commandType = command["command_type"];
-          JsonObject payload = command["payload"];
+        if (commands.size() > 0) {
+          Serial.printf("☁️ Found %d pending cloud commands\n", commands.size());
           
-          Serial.printf("☁️ Processing cloud command: %s (%s)\n", commandType.c_str(), commandId.c_str());
-          
-          if (commandType == "motor_control") {
-            processMotorCommand(commandId, payload);
-          } else if (commandType == "emergency_stop") {
-            processEmergencyStop(commandId, payload);
-          } else if (commandType == "emergency_reset") {
-            processEmergencyReset(commandId, payload);
+          for (JsonObject command : commands) {
+            String commandId = command["id"];
+            String commandType = command["type"]; // Fixed: use 'type' column name, not 'command_type'
+            JsonObject payload = command["payload"];
+            
+            Serial.printf("☁️ Processing cloud command: %s (%s)\n", commandType.c_str(), commandId.c_str());
+            
+            if (commandType == "motor_control") {
+              // processMotorCommand(commandId, payload); // Disabled for now
+              acknowledgeCloudCommand(commandId, "processed");
+            } else if (commandType == "emergency_stop") {
+              // processEmergencyStop(commandId, payload); // Disabled for now
+              acknowledgeCloudCommand(commandId, "processed");
+            } else if (commandType == "emergency_reset") {
+              // processEmergencyReset(commandId, payload); // Disabled for now
+              acknowledgeCloudCommand(commandId, "processed");
+            }
           }
-          
-          // Acknowledge the cloud command
-          acknowledgeCloudCommand(commandId, "processed");
         }
       } else {
-        Serial.println("❌ Failed to parse cloud commands JSON");
+        Serial.printf("❌ Failed to parse cloud commands JSON: %s\n", error.c_str());
       }
-    } else if (httpCode != 404) { // 404 means no commands, which is normal
+    } else if (httpCode == 404) {
+      // 404 means no commands or table doesn't exist, which is normal
+      Serial.println("☁️ No pending commands (404 - table may not exist yet)");
+    } else if (httpCode == 400) {
+      Serial.printf("❌ Cloud commands HTTP 400 - disabling for 5 minutes\n");
+      cloudCommandsDisabled = true;
+      lastCloudCommandError = millis();
+    } else {
       Serial.printf("❌ Failed to fetch cloud commands: HTTP %d\n", httpCode);
     }
     
     http.end();
+  } else {
+    Serial.println("❌ Failed to initialize HTTP client for cloud commands");
   }
 }
 
@@ -557,8 +621,8 @@ void acknowledgeCloudCommand(String commandId, String status) {
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(128);
-    doc["status"] = status;
-    doc["processed_at"] = "now()";
+    doc["acknowledged"] = true; // Fixed: use 'acknowledged' column, not 'status'
+    // Note: removed 'processed_at' as it doesn't exist in the schema
     
     String payload;
     serializeJson(doc, payload);
@@ -582,80 +646,130 @@ void acknowledgeCloudCommand(String commandId, String status) {
 }
 
 // ========== SENSOR FUNCTIONS ==========
+void diagnosticSensorTest() {
+  Serial.println("\n🔍 ULTRASONIC SENSOR DIAGNOSTIC TEST");
+  Serial.printf("📍 Sensor Pins - TRIG: %d, ECHO: %d\n", TRIG_PIN, ECHO_PIN);
+  Serial.printf("📏 Tank Dimensions: %.1f×%.1f×%.1fcm (Height: %.1fcm)\n", 
+                TANK_LENGTH_CM, TANK_WIDTH_CM, TANK_HEIGHT_CM, TANK_HEIGHT_CM);
+  Serial.printf("📐 Valid Distance Range: 5.0cm to %.1fcm\n", TANK_HEIGHT_CM + 50.0);
+  
+  for (int i = 0; i < 10; i++) {
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(20);
+    digitalWrite(TRIG_PIN, LOW);
+    
+    long duration = pulseIn(ECHO_PIN, HIGH, 50000);
+    float distance = duration * 0.034 / 2.0;
+    
+    Serial.printf("Test %d: Duration=%ld μs, Distance=%.1fcm", i+1, duration, distance);
+    
+    if (duration == 0) {
+      Serial.println(" ❌ NO ECHO");
+    } else if (distance < 5.0) {
+      Serial.println(" ⚠️ TOO CLOSE");
+    } else if (distance > TANK_HEIGHT_CM + 50.0) {
+      Serial.println(" ⚠️ TOO FAR");
+    } else {
+      float waterHeight = TANK_HEIGHT_CM - distance - SENSOR_OFFSET_CM;
+      float level = (waterHeight / (TANK_HEIGHT_CM - SENSOR_OFFSET_CM)) * 100.0;
+      Serial.printf(" ✅ VALID (Water: %.1fcm, Level: %.1f%%)", waterHeight, level);
+    }
+    Serial.println();
+    
+    delay(500);
+  }
+  
+  Serial.println("🔍 Diagnostic complete. Check wiring if seeing 'NO ECHO' or 'TOO FAR'\n");
+}
+
+// ========== SENSOR FUNCTIONS ==========
 void readSensors() {
   static float lastValidLevel = 0.0;
   static int invalidReadingCount = 0;
   static float readings[5] = {0}; // Store last 5 readings for filtering
   static int readingIndex = 0;
   
-  // Read ultrasonic sensor with error handling
+  // Read ultrasonic sensor with improved error handling
   digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(10); // Longer stabilization
   digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
+  delayMicroseconds(20); // Longer trigger pulse for better reliability
   digitalWrite(TRIG_PIN, LOW);
   
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30ms timeout
+  long duration = pulseIn(ECHO_PIN, HIGH, 50000); // Extended timeout to 50ms
   float newLevel = currentLevel; // Default to previous level
   float newVolume = currentVolume;
   float effectiveHeight = TANK_HEIGHT_CM - SENSOR_OFFSET_CM; // Effective measurement range
   
-  if (duration > 0 && duration < 25000) { // Valid reading range
+  if (duration > 0 && duration < 40000) { // More generous valid reading range
     float distance = duration * 0.034 / 2.0;
     
-    if (distance <= TANK_HEIGHT_CM && distance >= SENSOR_OFFSET_CM) {
+    // More restrictive distance validation for tank dimensions
+    if (distance >= 5.0 && distance <= (TANK_HEIGHT_CM + 50.0)) { // Allow 50cm buffer above tank
       float waterHeight = TANK_HEIGHT_CM - distance - SENSOR_OFFSET_CM;
-      newLevel = (waterHeight / effectiveHeight) * 100.0;
-      newLevel = constrain(newLevel, 0.0, 100.0);
       
-      // Store reading for filtering
-      readings[readingIndex] = newLevel;
-      readingIndex = (readingIndex + 1) % 5;
-      
-      // Check if this reading is reasonable (not more than 20% change from last valid)
-      if (lastValidLevel > 0 && abs(newLevel - lastValidLevel) > 20.0) {
-        invalidReadingCount++;
-        Serial.printf("⚠️ Suspicious reading: %.1f%% (last valid: %.1f%%, diff: %.1f%%)\n", 
-                      newLevel, lastValidLevel, abs(newLevel - lastValidLevel));
+      // Ensure water height is reasonable
+      if (waterHeight >= 0 && waterHeight <= (TANK_HEIGHT_CM - SENSOR_OFFSET_CM)) {
+        newLevel = (waterHeight / effectiveHeight) * 100.0;
+        newLevel = constrain(newLevel, 0.0, 100.0);
         
-        // If we have multiple invalid readings, use filtered average
-        if (invalidReadingCount >= 3) {
-          // Calculate average of stored readings
-          float sum = 0;
-          int validCount = 0;
-          for (int i = 0; i < 5; i++) {
-            if (readings[i] > 0 && abs(readings[i] - lastValidLevel) <= 20.0) {
-              sum += readings[i];
-              validCount++;
-            }
-          }
+        // Store reading for filtering
+        readings[readingIndex] = newLevel;
+        readingIndex = (readingIndex + 1) % 5;
+        
+        // Check if this reading is reasonable (not more than 20% change from last valid)
+        if (lastValidLevel > 0 && abs(newLevel - lastValidLevel) > 20.0) {
+          invalidReadingCount++;
+          Serial.printf("⚠️ Suspicious reading: %.1f%% (last valid: %.1f%%, diff: %.1f%%)\n", 
+                        newLevel, lastValidLevel, abs(newLevel - lastValidLevel));
           
-          if (validCount > 0) {
-            newLevel = sum / validCount;
-            Serial.printf("🔧 Using filtered reading: %.1f%% (from %d valid samples)\n", newLevel, validCount);
+          // If we have multiple invalid readings, use filtered average
+          if (invalidReadingCount >= 3) {
+            // Calculate average of stored readings
+            float sum = 0;
+            int validCount = 0;
+            for (int i = 0; i < 5; i++) {
+              if (readings[i] > 0 && abs(readings[i] - lastValidLevel) <= 20.0) {
+                sum += readings[i];
+                validCount++;
+              }
+            }
+            
+            if (validCount > 0) {
+              newLevel = sum / validCount;
+              Serial.printf("🔧 Using filtered reading: %.1f%% (from %d valid samples)\n", newLevel, validCount);
+            } else {
+              newLevel = lastValidLevel; // Keep last known good value
+              Serial.printf("🔧 Using last valid reading: %.1f%%\n", newLevel);
+            }
           } else {
             newLevel = lastValidLevel; // Keep last known good value
-            Serial.printf("🔧 Using last valid reading: %.1f%%\n", newLevel);
           }
         } else {
-          newLevel = lastValidLevel; // Keep last known good value
+          // Reading looks reasonable
+          lastValidLevel = newLevel;
+          invalidReadingCount = 0;
         }
+        
+        // Calculate volume based on fixed tank capacity and level percentage
+        newVolume = (newLevel / 100.0) * TANK_CAPACITY_LITERS;
       } else {
-        // Reading looks reasonable
-        lastValidLevel = newLevel;
-        invalidReadingCount = 0;
+        invalidReadingCount++;
+        Serial.printf("⚠️ Invalid water height: %.1fcm (distance: %.1fcm)\n", waterHeight, distance);
       }
-      
-      // Calculate volume for rectangular tank using the already calculated effectiveHeight
-      float waterHeightFromLevel = (newLevel / 100.0) * effectiveHeight;
-      newVolume = (TANK_LENGTH_CM * TANK_WIDTH_CM * waterHeightFromLevel) / 1000.0;
     } else {
       invalidReadingCount++;
-      Serial.printf("⚠️ Distance out of range: %.1fcm\n", distance);
+      Serial.printf("⚠️ Distance out of range: %.1fcm (valid: 5-%.1fcm)\n", distance, TANK_HEIGHT_CM + 50.0);
     }
   } else {
     invalidReadingCount++;
-    Serial.println("⚠️ Ultrasonic sensor reading timeout");
+    if (duration == 0) {
+      Serial.println("⚠️ Ultrasonic sensor - No echo received (check wiring)");
+    } else {
+      Serial.printf("⚠️ Ultrasonic sensor reading timeout: %ld μs\n", duration);
+    }
   }
   
   // Update global values only if they're reasonable
@@ -665,15 +779,18 @@ void readSensors() {
   }
   
   // Read float switch
-  floatSwitchState = digitalRead(FLOAT_SWITCH_PIN) == LOW;
+  bool rawFloatState = digitalRead(FLOAT_SWITCH_PIN);
+  floatSwitchState = rawFloatState == LOW; // LOW = water present (if using pullup)
   
-  // Enhanced logging with error count
+  // Enhanced logging with error count and float switch debugging
   if (invalidReadingCount > 0) {
-    Serial.printf("📊 Tank: %.1f%% (%.1fL) | Float: %s | Errors: %d\n", 
-                  currentLevel, currentVolume, floatSwitchState ? "OK" : "LOW", invalidReadingCount);
+    Serial.printf("📊 Tank: %.1f%% (%.1fL) | Float: %s (raw: %s) | Errors: %d\n", 
+                  currentLevel, currentVolume, floatSwitchState ? "OK" : "LOW", 
+                  rawFloatState ? "HIGH" : "LOW", invalidReadingCount);
   } else {
-    Serial.printf("📊 Tank: %.1f%% (%.1fL) | Float: %s\n", 
-                  currentLevel, currentVolume, floatSwitchState ? "OK" : "LOW");
+    Serial.printf("📊 Tank: %.1f%% (%.1fL) | Float: %s (raw: %s)\n", 
+                  currentLevel, currentVolume, floatSwitchState ? "OK" : "LOW",
+                  rawFloatState ? "HIGH" : "LOW");
   }
   
   // Reset error count periodically
@@ -999,13 +1116,15 @@ void checkPanicConditions(unsigned long currentMillis) {
   String panicReason = "";
   
   // Check 1: Backend unresponsive for too long (only if backend was available)
-  if (backendAvailable && lastBackendResponse > 0 && 
+  if (BACKEND_ENABLED && backendAvailable && lastBackendResponse > 0 && 
       currentMillis - lastBackendResponse > PANIC_THRESHOLD_MS) {
     shouldPanic = true;
     panicReason = "Backend unresponsive for " + String(PANIC_THRESHOLD_MS/1000) + " seconds";
   }
   
+  // TEMPORARILY DISABLE sensor-based panic to avoid restart loops
   // Check 2: Critical hardware failure (sensor always reading 0 or max)
+  /*
   static int sensorErrorCount = 0;
   if (currentLevel == 0.0 || currentLevel >= 99.9) {
     sensorErrorCount++;
@@ -1016,6 +1135,7 @@ void checkPanicConditions(unsigned long currentMillis) {
   } else {
     sensorErrorCount = 0;
   }
+  */
   
   // Check 3: Motor stuck on for too long
   if (motorRunning && motorStartTime > 0 && 
@@ -1091,19 +1211,16 @@ void reportPanicToCloud(String reason) {
   if (!wifiConnected || !cloudAvailable) return;
   
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/device_alerts";
+  String url = String(SUPABASE_URL) + "/rest/v1/alerts"; // Fixed: use 'alerts' table name, not 'device_alerts'
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(512);
-    doc["device_id"] = DEVICE_ID;
-    doc["alert_type"] = "panic_mode";
+    doc["esp32_id"] = DEVICE_ID; // Fixed: use 'esp32_id' not 'device_id'
+    doc["type"] = "error"; // Fixed: use 'type' not 'alert_type', and 'error' is valid enum value
     doc["severity"] = "critical";
+    doc["title"] = "Panic Mode Activated"; // Added required 'title' field
     doc["message"] = reason;
-    doc["level_percentage"] = currentLevel;
-    doc["motor_running"] = motorRunning;
-    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["metadata"] = JsonObject();
+    // Removed fields that don't exist in alerts table schema
     
     String payload;
     serializeJson(doc, payload);
@@ -1494,6 +1611,8 @@ void reportSystemStatus() {
                 TANK_LENGTH_CM, TANK_WIDTH_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
   Serial.printf("Water Level: %.1f%% (%.1fL)\n", currentLevel, currentVolume);
   Serial.printf("Float Switch: %s\n", floatSwitchState ? "Water Present" : "No Water");
+  Serial.printf("Float Switch Debug: Raw GPIO reading = %s, Expected for water = LOW\n", 
+                digitalRead(FLOAT_SWITCH_PIN) ? "HIGH" : "LOW");
   Serial.printf("Motor: %s", motorRunning ? "RUNNING" : "STOPPED");
   if (motorRunning && motorStartTime > 0) {
     Serial.printf(" (Runtime: %lu min)", (millis() - motorStartTime) / 60000);

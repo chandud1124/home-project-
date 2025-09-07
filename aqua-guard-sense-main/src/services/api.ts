@@ -616,43 +616,61 @@ class ApiService {
   // Tank data methods
   async getTanks(): Promise<TankReading[]> {
     console.log('🔧 getTanks called, USE_MOCK_API:', USE_MOCK_API);
-    console.log('🔧 BACKEND_URL:', BACKEND_URL);
     
     if (USE_MOCK_API) {
       return mockApiService.getTanks();
     }
     
     try {
-      console.log('📡 Fetching from:', `${BACKEND_URL}/api/tanks`);
-      const response = await fetch(`${BACKEND_URL}/api/tanks`)
-      console.log('📡 Response status:', response.status, response.statusText);
+      // Use Supabase direct query for cloud-only mode
+      console.log('📡 Fetching from Supabase tank_readings table...');
       
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+      // Get latest reading for each tank type
+      const { data: sumpData, error: sumpError } = await supabase
+        .from('tank_readings')
+        .select('*')
+        .eq('tank_type', 'sump_tank')
+        .order('timestamp', { ascending: false })
+        .limit(1);
+
+      const { data: topData, error: topError } = await supabase
+        .from('tank_readings')
+        .select('*')
+        .eq('tank_type', 'top_tank')
+        .order('timestamp', { ascending: false })
+        .limit(1);
+
+      if (sumpError || topError) {
+        throw new Error(`Supabase error: ${sumpError?.message || topError?.message}`);
       }
-      const data = await response.json()
-      console.log('📡 Raw API response:', data);
+
+      const data = [];
+      if (sumpData && sumpData.length > 0) data.push(sumpData[0]);
+      if (topData && topData.length > 0) data.push(topData[0]);
+
+      console.log('📡 Raw Supabase response:', data);
 
       // Transform the data to match our interface
       const transformedData = data.map((reading: any) => ({
-        id: reading._id || reading.id || '1',
+        id: reading.id || '1',
         tank_type: reading.tank_type,
-        level_percentage: reading.level_percentage,
-        level_liters: reading.level_liters,
-        sensor_health: reading.sensor_health,
+        level_percentage: reading.level_percentage || 0,
+        level_liters: reading.level_liters || 0,
+        sensor_health: reading.sensor_health || 'offline',
         esp32_id: reading.esp32_id,
         signal_strength: reading.signal_strength,
         float_switch: reading.float_switch,
         motor_running: reading.motor_running,
         manual_override: reading.manual_override,
         auto_mode_enabled: reading.auto_mode_enabled,
+        connection_state: (reading.sensor_health === 'online' ? 'connected' : 'disconnected') as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale',
         timestamp: reading.timestamp
-      }))
+      }));
       
       console.log('📡 Transformed data:', transformedData);
       return transformedData;
     } catch (error) {
-      console.error('Error fetching tanks:', error)
+      console.error('Error fetching tanks from Supabase:', error)
       
       if (USE_MOCK_API) {
         console.log('Falling back to mock data');
@@ -806,23 +824,53 @@ class ApiService {
     }
     
     try {
-      const response = await fetch(`${BACKEND_URL}/api/motor/events`)
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-      const data = await response.json()
+      if (CLOUD_ONLY_MODE) {
+        // Use Supabase direct query for cloud-only mode
+        console.log('📡 Fetching motor events from Supabase motor_events table...');
+        
+        const { data, error } = await supabase
+          .from('motor_events')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .limit(50);
 
-      // Transform the data to match our interface
-      return data.map((event: any) => ({
-        id: event._id || event.id || '1',
-        event_type: event.event_type,
-        duration: event.duration,
-        esp32_id: event.esp32_id,
-        motor_running: event.motor_running,
-        power_detected: event.power_detected,
-        current_draw: event.current_draw,
-        timestamp: event.timestamp
-      }))
+        if (error) {
+          throw new Error(`Supabase error: ${error.message}`);
+        }
+
+        console.log('📡 Supabase motor events response:', data);
+
+        // Transform the data to match our interface
+        return (data || []).map((event: any) => ({
+          id: event.id || '1',
+          event_type: event.event_type,
+          duration: event.duration,
+          esp32_id: event.esp32_id,
+          motor_running: event.motor_running,
+          power_detected: event.power_detected,
+          current_draw: event.current_draw,
+          timestamp: event.timestamp
+        }));
+      } else {
+        // Legacy backend API mode
+        const response = await fetch(`${BACKEND_URL}/api/motor/events`)
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+        const data = await response.json()
+
+        // Transform the data to match our interface
+        return data.map((event: any) => ({
+          id: event._id || event.id || '1',
+          event_type: event.event_type,
+          duration: event.duration,
+          esp32_id: event.esp32_id,
+          motor_running: event.motor_running,
+          power_detected: event.power_detected,
+          current_draw: event.current_draw,
+          timestamp: event.timestamp
+        }));
+      }
     } catch (error) {
       console.error('Error fetching motor events:', error)
       if (USE_MOCK_API) {
@@ -893,20 +941,47 @@ class ApiService {
     }
     
     try {
-      const response = await fetch(`${BACKEND_URL}/api/alerts`)
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-      const data = await response.json()
+      if (CLOUD_ONLY_MODE) {
+        // Use Supabase direct query for cloud-only mode
+        console.log('📡 Fetching alerts from Supabase alerts table...');
+        
+        const { data, error } = await supabase
+          .from('alerts')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .limit(20);
 
-      // Transform the data to match our interface
-      return data.map((alert: any) => ({
-        id: alert._id || alert.id || '1',
-        type: alert.type,
-        message: alert.message,
-        resolved: alert.resolved,
-        timestamp: alert.timestamp
-      }))
+        if (error) {
+          throw new Error(`Supabase error: ${error.message}`);
+        }
+
+        console.log('📡 Supabase alerts response:', data);
+
+        // Transform the data to match our interface
+        return (data || []).map((alert: any) => ({
+          id: alert.id || '1',
+          type: alert.type,
+          message: alert.message || alert.title,
+          resolved: alert.resolved,
+          timestamp: alert.timestamp
+        }));
+      } else {
+        // Legacy backend API mode
+        const response = await fetch(`${BACKEND_URL}/api/alerts`)
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+        const data = await response.json()
+
+        // Transform the data to match our interface
+        return data.map((alert: any) => ({
+          id: alert._id || alert.id || '1',
+          type: alert.type,
+          message: alert.message,
+          resolved: alert.resolved,
+          timestamp: alert.timestamp
+        }));
+      }
     } catch (error) {
       console.error('Error fetching alerts:', error)
       if (USE_MOCK_API) {

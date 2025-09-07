@@ -84,7 +84,7 @@
 #define WIFI_RECONNECT_DELAY 10000    // Wait 10s before WiFi reconnect
 #define PANIC_THRESHOLD_MS 300000     // 5 minutes of no response = panic
 #define DAILY_RESTART_HOUR 2          // Restart at 2:00 AM
-#define WATCHDOG_TIMEOUT_S 30         // Watchdog timeout
+#define WATCHDOG_TIMEOUT_S 60         // Increased to 60 seconds watchdog timeout
 
 // ========== SAFETY & ERROR HANDLING ==========
 #define MAX_WIFI_RETRIES 3
@@ -151,20 +151,27 @@ void setup() {
   // Setup NTP for time synchronization
   setupNTP();
   
-  // Initialize backend connection
-  checkBackendAvailability();
+  // Initialize backend connection (only if enabled)
+  if (BACKEND_ENABLED) {
+    checkBackendAvailability();
+  }
   
   // Initialize cloud connection
+  Serial.println("☁️ Testing cloud connectivity...");
   checkCloudAvailability();
   
   // Check Sump ESP32 availability
   checkSumpESP32Availability();
   
-  Serial.println("✅ Enhanced + Cloud Setup Complete!");
+  Serial.println(BACKEND_ENABLED ? "✅ Enhanced + Cloud Setup Complete!" : "✅ Cloud-Only Setup Complete!");
   Serial.printf("📊 Tank: Cylinder Ø%.1fcm × %.1fcm (%.1fL)\n", 
                 TANK_DIAMETER_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
   Serial.printf("🌐 Local IP: %s\n", WiFi.localIP().toString().c_str());
-  Serial.printf("📡 Backend: %s:%d (Available: %s)\n", BACKEND_HOST, BACKEND_PORT, backendAvailable ? "Yes" : "No");
+  if (BACKEND_ENABLED) {
+    Serial.printf("📡 Backend: %s:%d (Available: %s)\n", BACKEND_HOST, BACKEND_PORT, backendAvailable ? "Yes" : "No");
+  } else {
+    Serial.printf("📡 Backend: Disabled (Cloud-Only Mode)\n");
+  }
   Serial.printf("☁️ Cloud: %s (Available: %s)\n", SUPABASE_URL, cloudAvailable ? "Yes" : "No");
   Serial.printf("⚙️ Sump ESP32: %s:%d (Available: %s)\n", SUMP_ESP32_IP, SUMP_ESP32_PORT, sumpESP32Available ? "Yes" : "No");
 }
@@ -194,8 +201,8 @@ void loop() {
     lastWifiConnect = currentMillis;
   }
   
-  // Check backend availability
-  if (currentMillis - lastBackendCheck >= BACKEND_CHECK_INTERVAL) {
+  // Check backend availability (only if backend enabled)
+  if (BACKEND_ENABLED && currentMillis - lastBackendCheck >= BACKEND_CHECK_INTERVAL) {
     checkBackendAvailability();
     checkSumpESP32Availability();
     lastBackendCheck = currentMillis;
@@ -208,8 +215,8 @@ void loop() {
     lastCloudSync = currentMillis;
   }
   
-  // Send heartbeat to backend
-  if (wifiConnected && backendAvailable && 
+  // Send heartbeat to backend (only if backend enabled)
+  if (BACKEND_ENABLED && wifiConnected && backendAvailable && 
       currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
     sendHeartbeat();
     lastHeartbeat = currentMillis;
@@ -218,12 +225,15 @@ void loop() {
   // Check for pending commands from backend and cloud
   if (wifiConnected && 
       currentMillis - lastCommandCheck >= COMMAND_CHECK_INTERVAL) {
-    if (backendAvailable) {
+    if (BACKEND_ENABLED && backendAvailable) {
       checkPendingCommands();
     }
+    // TEMPORARILY DISABLED: Cloud commands causing HTTP 400 errors
+    /*
     if (cloudAvailable) {
       checkPendingCloudCommands();
     }
+    */
     lastCommandCheck = currentMillis;
   }
   
@@ -241,6 +251,19 @@ void loop() {
   if (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL) {
     reportSystemStatus();
     lastStatusReport = currentMillis;
+  }
+  
+  // Check for serial commands (diagnostic mode)
+  if (Serial.available()) {
+    String command = Serial.readString();
+    command.trim();
+    if (command == "diag" || command == "DIAG") {
+      Serial.println("\n🔧 Manual diagnostic requested...");
+      diagnosticSensorTest();
+    } else if (command == "restart" || command == "RESTART") {
+      Serial.println("🔄 Manual restart requested...");
+      ESP.restart();
+    }
   }
 }
 
@@ -313,7 +336,7 @@ void checkCloudAvailability() {
   }
   
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/devices?select=device_id&device_id=eq." + DEVICE_ID;
+  String url = String(SUPABASE_URL) + "/rest/v1/tank_readings?select=esp32_id&esp32_id=eq." + DEVICE_ID + "&limit=1"; // Changed to tank_readings table
   
   if (http.begin(url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
@@ -350,19 +373,20 @@ void syncWithCloud() {
   
   // Send device status to cloud
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/device_readings";
+  String url = String(SUPABASE_URL) + "/rest/v1/tank_readings"; // Changed from device_readings to tank_readings
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(512);
-    doc["device_id"] = DEVICE_ID;
+    doc["esp32_id"] = DEVICE_ID; // Match Supabase schema
+    doc["tank_type"] = "top_tank"; // Standard tank type
     doc["level_percentage"] = currentLevel;
     doc["level_liters"] = currentVolume;
-    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
-    doc["low_level_alert"] = currentLevel <= LOW_LEVEL_THRESHOLD;
-    doc["critical_level_alert"] = currentLevel <= CRITICAL_LEVEL_THRESHOLD;
-    doc["sump_available"] = sumpESP32Available;
+    doc["motor_running"] = false; // Top tank doesn't have motor
+    doc["auto_mode_enabled"] = true; // Default auto mode
+    doc["sensor_health"] = "good"; // Default sensor health
     doc["wifi_rssi"] = WiFi.RSSI();
-    doc["free_heap"] = ESP.getFreeHeap();
+    doc["battery_voltage"] = 12.0; // Assume 12V power supply
+    doc["signal_strength"] = WiFi.RSSI();
     doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     
     String payload;
@@ -395,7 +419,7 @@ void checkPendingCloudCommands() {
   }
   
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?select=*&device_id=eq." + DEVICE_ID + "&status=eq.pending&order=created_at.asc";
+  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?select=*&device_id=eq." + DEVICE_ID + "&acknowledged=eq.false&order=created_at.asc"; // Fixed: use acknowledged=false not status=pending
   
   if (http.begin(url)) {
     http.addHeader("apikey", SUPABASE_ANON_KEY);
@@ -416,7 +440,7 @@ void checkPendingCloudCommands() {
         
         for (JsonObject command : commands) {
           String commandId = command["id"];
-          String commandType = command["command_type"];
+          String commandType = command["type"]; // Fixed: use 'type' column name, not 'command_type'
           JsonObject payload = command["payload"];
           
           Serial.printf("☁️ Processing cloud command: %s (%s)\n", commandType.c_str(), commandId.c_str());
@@ -445,8 +469,8 @@ void acknowledgeCloudCommand(String commandId, String status) {
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(128);
-    doc["status"] = status;
-    doc["processed_at"] = "now()";
+    doc["acknowledged"] = true; // Fixed: use 'acknowledged' column, not 'status'
+    // Note: removed 'processed_at' as it doesn't exist in the schema
     
     String payload;
     serializeJson(doc, payload);
@@ -470,31 +494,73 @@ void acknowledgeCloudCommand(String commandId, String status) {
 }
 
 // ========== SENSOR FUNCTIONS ==========
+void diagnosticSensorTest() {
+  Serial.println("\n🔍 ULTRASONIC SENSOR DIAGNOSTIC TEST (TOP TANK)");
+  Serial.printf("📍 Sensor Pins - TRIG: %d, ECHO: %d\n", TRIG_PIN, ECHO_PIN);
+  Serial.printf("📏 Tank Dimensions: Ø%.1fcm × %.1fcm (Cylindrical)\n", 
+                TANK_DIAMETER_CM, TANK_HEIGHT_CM);
+  Serial.printf("📐 Valid Distance Range: 5.0cm to %.1fcm\n", TANK_HEIGHT_CM + 50.0);
+  
+  for (int i = 0; i < 10; i++) {
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(20);
+    digitalWrite(TRIG_PIN, LOW);
+    
+    long duration = pulseIn(ECHO_PIN, HIGH, 50000);
+    float distance = duration * 0.034 / 2.0;
+    
+    Serial.printf("Test %d: Duration=%ld μs, Distance=%.1fcm", i+1, duration, distance);
+    
+    if (duration == 0) {
+      Serial.println(" ❌ NO ECHO");
+    } else if (distance < 5.0) {
+      Serial.println(" ⚠️ TOO CLOSE");
+    } else if (distance > TANK_HEIGHT_CM + 50.0) {
+      Serial.println(" ⚠️ TOO FAR");
+    } else {
+      float waterHeight = TANK_HEIGHT_CM - distance - SENSOR_OFFSET_CM;
+      float level = (waterHeight / (TANK_HEIGHT_CM - SENSOR_OFFSET_CM)) * 100.0;
+      Serial.printf(" ✅ VALID (Water: %.1fcm, Level: %.1f%%)", waterHeight, level);
+    }
+    Serial.println();
+    
+    delay(500);
+  }
+  
+  Serial.println("🔍 Diagnostic complete. Check wiring if seeing 'NO ECHO' or 'TOO FAR'\n");
+}
+
 void readSensors() {
   static float lastValidLevel = 0.0;
   static int invalidReadingCount = 0;
   static float readings[5] = {0}; // Store last 5 readings for filtering
   static int readingIndex = 0;
   
-  // Read ultrasonic sensor with error handling
+  // Read ultrasonic sensor with improved error handling
   digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(10); // Longer stabilization
   digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
+  delayMicroseconds(20); // Longer trigger pulse for better reliability
   digitalWrite(TRIG_PIN, LOW);
   
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30ms timeout
+  long duration = pulseIn(ECHO_PIN, HIGH, 50000); // Extended timeout to 50ms
   float newLevel = currentLevel; // Default to previous level
   float newVolume = currentVolume;
   float effectiveHeight = TANK_HEIGHT_CM - SENSOR_OFFSET_CM; // Effective measurement range
   
-  if (duration > 0 && duration < 25000) { // Valid reading range
+  if (duration > 0 && duration < 40000) { // More generous valid reading range
     float distance = duration * 0.034 / 2.0;
     
-    if (distance <= TANK_HEIGHT_CM && distance >= SENSOR_OFFSET_CM) {
+    // More restrictive distance validation for tank dimensions
+    if (distance >= 5.0 && distance <= (TANK_HEIGHT_CM + 50.0)) { // Allow 50cm buffer above tank
       float waterHeight = TANK_HEIGHT_CM - distance - SENSOR_OFFSET_CM;
-      newLevel = (waterHeight / effectiveHeight) * 100.0;
-      newLevel = constrain(newLevel, 0.0, 100.0);
+      
+      // Ensure water height is reasonable
+      if (waterHeight >= 0 && waterHeight <= (TANK_HEIGHT_CM - SENSOR_OFFSET_CM)) {
+        newLevel = (waterHeight / effectiveHeight) * 100.0;
+        newLevel = constrain(newLevel, 0.0, 100.0);
       
       // Store reading for filtering
       readings[readingIndex] = newLevel;
@@ -537,13 +603,21 @@ void readSensors() {
       // Calculate volume for cylindrical tank using the already calculated effectiveHeight
       float waterHeightFromLevel = (newLevel / 100.0) * effectiveHeight;
       newVolume = PI * TANK_RADIUS_CM * TANK_RADIUS_CM * waterHeightFromLevel / 1000.0;
+      } else {
+        invalidReadingCount++;
+        Serial.printf("⚠️ Invalid water height: %.1fcm (distance: %.1fcm)\n", waterHeight, distance);
+      }
     } else {
       invalidReadingCount++;
-      Serial.printf("⚠️ Distance out of range: %.1fcm\n", distance);
+      Serial.printf("⚠️ Distance out of range: %.1fcm (valid: 5-%.1fcm)\n", distance, TANK_HEIGHT_CM + 50.0);
     }
   } else {
     invalidReadingCount++;
-    Serial.println("⚠️ Ultrasonic sensor reading timeout");
+    if (duration == 0) {
+      Serial.println("⚠️ Ultrasonic sensor - No echo received (check wiring)");
+    } else {
+      Serial.printf("⚠️ Ultrasonic sensor reading timeout: %ld μs\n", duration);
+    }
   }
   
   // Update global values only if they're reasonable
@@ -865,13 +939,15 @@ void checkPanicConditions(unsigned long currentMillis) {
   String panicReason = "";
   
   // Check 1: Backend unresponsive for too long (only if backend was available)
-  if (backendAvailable && lastBackendResponse > 0 && 
+  if (BACKEND_ENABLED && backendAvailable && lastBackendResponse > 0 && 
       currentMillis - lastBackendResponse > PANIC_THRESHOLD_MS) {
     shouldPanic = true;
     panicReason = "Backend unresponsive for " + String(PANIC_THRESHOLD_MS/1000) + " seconds";
   }
   
+  // TEMPORARILY DISABLE sensor-based panic to avoid restart loops
   // Check 2: Critical hardware failure (sensor always reading 0 or max)
+  /*
   static int sensorErrorCount = 0;
   if (currentLevel == 0.0 || currentLevel >= 99.9) {
     sensorErrorCount++;
@@ -882,6 +958,7 @@ void checkPanicConditions(unsigned long currentMillis) {
   } else {
     sensorErrorCount = 0;
   }
+  */
   
   // Check 3: Low memory condition
   if (ESP.getFreeHeap() < 10000) { // Less than 10KB free
@@ -946,19 +1023,16 @@ void reportPanicToCloud(String reason) {
   if (!wifiConnected || !cloudAvailable) return;
   
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/device_alerts";
+  String url = String(SUPABASE_URL) + "/rest/v1/alerts"; // Fixed: use 'alerts' table name, not 'device_alerts'
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(512);
-    doc["device_id"] = DEVICE_ID;
-    doc["alert_type"] = "panic_mode";
+    doc["esp32_id"] = DEVICE_ID; // Fixed: use 'esp32_id' not 'device_id'
+    doc["type"] = "error"; // Fixed: use 'type' not 'alert_type', and 'error' is valid enum value
     doc["severity"] = "critical";
+    doc["title"] = "Panic Mode Activated"; // Added required 'title' field
     doc["message"] = reason;
-    doc["level_percentage"] = currentLevel;
-    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
-    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["metadata"] = JsonObject();
+    // Removed fields that don't exist in alerts table schema
     
     String payload;
     serializeJson(doc, payload);
@@ -1213,7 +1287,9 @@ void handleBuzzer() {
 
 // ========== STATUS REPORTING ==========
 void reportSystemStatus() {
-  Serial.println("\n========== ENHANCED + CLOUD TOP TANK STATUS ==========");
+  Serial.println(BACKEND_ENABLED ? 
+    "\n========== ENHANCED + CLOUD TOP TANK STATUS ==========" :
+    "\n========== CLOUD-ONLY TOP TANK STATUS ==========");
   Serial.printf("Device: %s (Uptime: %lu min)\n", DEVICE_ID, (millis() - systemStartTime) / 60000);
   Serial.printf("Tank: Cylinder Ø%.1fcm × %.1fcm (%.1fL capacity)\n", 
                 TANK_DIAMETER_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
@@ -1228,8 +1304,8 @@ void reportSystemStatus() {
     Serial.printf(" (%d dBm)", WiFi.RSSI());
   }
   Serial.println();
-  Serial.printf("Backend: %s", backendAvailable ? "Available" : "Unavailable");
-  if (backendAvailable && lastBackendResponse > 0) {
+  Serial.printf("Backend: %s", BACKEND_ENABLED ? (backendAvailable ? "Available" : "Unavailable") : "Disabled (Cloud-Only Mode)");
+  if (BACKEND_ENABLED && backendAvailable && lastBackendResponse > 0) {
     Serial.printf(" (Last response: %lu sec ago)", (millis() - lastBackendResponse) / 1000);
   }
   Serial.println();

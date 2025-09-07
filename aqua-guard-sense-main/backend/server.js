@@ -512,14 +512,15 @@ const handleSensorData = async (payload, ws) => {
       }));
 
       // Also broadcast system status update to frontend only
+      const { esp32_top_status, esp32_sump_status } = await getESP32Status();
       broadcast({
         type: 'system_status',
         data: {
-          wifi_connected: true,
+          wifi_connected: esp32_top_status === 'online' || esp32_sump_status === 'online',
           battery_level: 85, // ESP32 doesn't have battery, use default
           temperature: 25,
-          esp32_top_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'top_tank') ? 'online' : 'offline',
-          esp32_sump_status: Array.from(esp32Connections.values()).some(conn => conn.deviceInfo?.device_type === 'sump_tank') ? 'online' : 'offline',
+          esp32_top_status,
+          esp32_sump_status,
           wifi_strength: payload.signal_strength || -50,
           float_switch: payload.float_switch,
           motor_running: payload.motor_running,
@@ -1960,66 +1961,73 @@ const trackEsp32Activity = (deviceId) => {
   console.log(`🔍 Current tracked devices: [${Array.from(esp32Activity.keys()).join(', ')}]`);
 };
 
+// Helper function to determine ESP32 status consistently
+const getESP32Status = async () => {
+  let esp32_top_status = 'offline';
+  let esp32_sump_status = 'offline';
+
+  // First, check recent HTTP activity (within last 5 minutes)
+  const now = Date.now();
+  const fiveMinutesAgo = now - (5 * 60 * 1000);
+  
+  const topTankActivity = esp32Activity.get('TOP_TANK');
+  const sumpTankActivity = esp32Activity.get('SUMP_TANK');
+  
+  if (topTankActivity && topTankActivity > fiveMinutesAgo) {
+    esp32_top_status = 'online';
+  }
+  if (sumpTankActivity && sumpTankActivity > fiveMinutesAgo) {
+    esp32_sump_status = 'online';
+  }
+
+  // Fallback: Try database query for device status
+  if (esp32_top_status === 'offline' || esp32_sump_status === 'offline') {
+    try {
+      const { data: devices, error } = await supabase
+        .from('esp32_devices')
+        .select('id, device_type, status, last_seen')
+        .order('last_seen', { ascending: false });
+
+      if (!error && devices) {
+        const tenMinutesAgo = new Date(now - 10 * 60 * 1000);
+        
+        const topTankDevice = devices.find(d => d.device_type === 'top_tank');
+        const sumpTankDevice = devices.find(d => d.device_type === 'sump_tank');
+        
+        if (esp32_top_status === 'offline' && topTankDevice && new Date(topTankDevice.last_seen) > tenMinutesAgo) {
+          esp32_top_status = 'online';
+        }
+        if (esp32_sump_status === 'offline' && sumpTankDevice && new Date(sumpTankDevice.last_seen) > tenMinutesAgo) {
+          esp32_sump_status = 'online';
+        }
+      }
+    } catch (dbError) {
+      console.log('Database query failed for device status check');
+    }
+  }
+
+  // Final fallback: Check active WebSocket connections
+  if (esp32_top_status === 'offline' || esp32_sump_status === 'offline') {
+    const topTankOnline = Array.from(esp32Connections.values()).some(conn => 
+      conn.deviceInfo?.device_type === 'top_tank' && conn.ws && conn.ws.readyState === 1);
+    const sumpTankOnline = Array.from(esp32Connections.values()).some(conn => 
+      conn.deviceInfo?.device_type === 'sump_tank' && conn.ws && conn.ws.readyState === 1);
+    
+    if (esp32_top_status === 'offline' && topTankOnline) esp32_top_status = 'online';
+    if (esp32_sump_status === 'offline' && sumpTankOnline) esp32_sump_status = 'online';
+  }
+
+  return { esp32_top_status, esp32_sump_status };
+};
+
 // Get latest system status
 app.get('/api/system/status', async (req, res) => {
   try {
-    // Check for ESP32 status using multiple approaches
-    let esp32_top_status = 'offline';
-    let esp32_sump_status = 'offline';
-
-    // First, check recent HTTP activity (within last 5 minutes)
-    const now = Date.now();
-    const fiveMinutesAgo = now - (5 * 60 * 1000);
-    
-    const topTankActivity = esp32Activity.get('TOP_TANK');
-    const sumpTankActivity = esp32Activity.get('SUMP_TANK');
-    
-    if (topTankActivity && topTankActivity > fiveMinutesAgo) {
-      esp32_top_status = 'online';
-    }
-    if (sumpTankActivity && sumpTankActivity > fiveMinutesAgo) {
-      esp32_sump_status = 'online';
-    }
-
-    // Fallback: Try database query for device status
-    if (esp32_top_status === 'offline' || esp32_sump_status === 'offline') {
-      try {
-        const { data: devices, error } = await supabase
-          .from('esp32_devices')
-          .select('id, device_type, status, last_seen')
-          .order('last_seen', { ascending: false });
-
-        if (!error && devices) {
-          const tenMinutesAgo = new Date(now - 10 * 60 * 1000);
-          
-          const topTankDevice = devices.find(d => d.device_type === 'top_tank');
-          const sumpTankDevice = devices.find(d => d.device_type === 'sump_tank');
-          
-          if (esp32_top_status === 'offline' && topTankDevice && new Date(topTankDevice.last_seen) > tenMinutesAgo) {
-            esp32_top_status = 'online';
-          }
-          if (esp32_sump_status === 'offline' && sumpTankDevice && new Date(sumpTankDevice.last_seen) > tenMinutesAgo) {
-            esp32_sump_status = 'online';
-          }
-        }
-      } catch (dbError) {
-        console.log('Database query failed for device status check');
-      }
-    }
-
-    // Final fallback: Check active WebSocket connections
-    if (esp32_top_status === 'offline' || esp32_sump_status === 'offline') {
-      const topTankOnline = Array.from(esp32Connections.values()).some(conn => 
-        conn.deviceInfo?.device_type === 'top_tank' && conn.ws && conn.ws.readyState === 1);
-      const sumpTankOnline = Array.from(esp32Connections.values()).some(conn => 
-        conn.deviceInfo?.device_type === 'sump_tank' && conn.ws && conn.ws.readyState === 1);
-      
-      if (esp32_top_status === 'offline' && topTankOnline) esp32_top_status = 'online';
-      if (esp32_sump_status === 'offline' && sumpTankOnline) esp32_sump_status = 'online';
-    }
+    // Get ESP32 status using consistent helper function
+    const { esp32_top_status, esp32_sump_status } = await getESP32Status();
 
     console.log(`📊 System Status Check - TOP_TANK: ${esp32_top_status}, SUMP_TANK: ${esp32_sump_status}`);
-    console.log(`📊 Recent activity - TOP_TANK: ${topTankActivity ? new Date(topTankActivity).toLocaleTimeString() : 'none'}, SUMP_TANK: ${sumpTankActivity ? new Date(sumpTankActivity).toLocaleTimeString() : 'none'}`);
+    console.log(`📊 Recent activity - TOP_TANK: ${esp32Activity.get('TOP_TANK') ? new Date(esp32Activity.get('TOP_TANK')).toLocaleTimeString() : 'none'}, SUMP_TANK: ${esp32Activity.get('SUMP_TANK') ? new Date(esp32Activity.get('SUMP_TANK')).toLocaleTimeString() : 'none'}`);
     console.log(`📊 Active WebSocket connections: ${esp32Connections.size}`);
     
     // Return current system status

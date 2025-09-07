@@ -712,22 +712,22 @@ const Index = () => {
         return 'disconnected'; // Data older than 5 minutes
       };
       
-      const topConnected = topTank && topTank.timestamp;
-      const sumpConnected = sumpTank && sumpTank.timestamp;
+      const topConnectionState = determineConnectionState(topTank);
+      const sumpConnectionState = determineConnectionState(sumpTank);
       
       setEsp32TopStatus({
-        connected: !!topConnected,
+        connected: topConnectionState === 'connected',
         wifiStrength: topTank?.signal_strength || 0,
         lastSeen: topTank ? new Date(topTank.timestamp) : null,
-        connectionState: determineConnectionState(topTank),
+        connectionState: topConnectionState,
         backendResponsive: true
       });
       
       setEsp32SumpStatus({
-        connected: !!sumpConnected,
+        connected: sumpConnectionState === 'connected',
         wifiStrength: sumpTank?.signal_strength || 0,
         lastSeen: sumpTank ? new Date(sumpTank.timestamp) : null,
-        connectionState: determineConnectionState(sumpTank),
+        connectionState: sumpConnectionState,
         backendResponsive: true
       });
       

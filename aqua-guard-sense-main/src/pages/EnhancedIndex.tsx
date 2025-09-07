@@ -69,9 +69,9 @@ interface SystemStatusMessage {
 
 type WebSocketMessageData = TankReadingMessage | SystemAlertMessage | SystemStatusMessage;
 
-// API types
+// API types - Updated to match API service types
 interface TankReading {
-  id: number;
+  id: string; // Changed from number to string to match API
   tank_type: string;
   level_percentage: number;
   level_liters: number;
@@ -81,10 +81,13 @@ interface TankReading {
   motor_running?: boolean;
   manual_override?: boolean;
   auto_mode_enabled?: boolean;
+  sensor_health?: string;
+  esp32_id?: string;
+  battery_voltage?: number;
 }
 
 interface ApiSystemAlert {
-  id: number;
+  id: string; // Changed from number to string to match API
   type: string;
   message: string;
   resolved: boolean;
@@ -92,13 +95,15 @@ interface ApiSystemAlert {
 }
 
 interface SystemStatusType {
-  id: number;
+  id?: string; // Changed from number to string and made optional
   wifi_connected: boolean;
   temperature: number;
   esp32_top_status: string;
   esp32_sump_status: string;
   timestamp: string;
   wifi_strength?: number;
+  battery_level?: number;
+  uptime?: string; // Added uptime property
 }
 
 const EnhancedIndex = () => {
@@ -306,7 +311,7 @@ const EnhancedIndex = () => {
       const alerts = await apiService.getAlerts();
       return alerts.map(alert => ({
         ...alert,
-        id: parseInt(alert.id) || 1
+        id: alert.id // Keep as string, no need to parse to int
       }));
     },
     getConsumptionData: async (): Promise<ConsumptionData[]> => {
@@ -360,7 +365,7 @@ const EnhancedIndex = () => {
               if (tankData.tank_type === 'top_tank') {
                 console.log('Updating top tank:', tankData.level_percentage);
                 setTopTank({
-                  id: 1,
+                  id: '1',
                   tank_type: tankData.tank_type,
                   level_percentage: tankData.level_percentage,
                   level_liters: tankData.level_liters,
@@ -371,7 +376,7 @@ const EnhancedIndex = () => {
                 setEsp32LastSeen(new Date());
               } else if (tankData.tank_type === 'sump_tank') {
                 setSumpTank({
-                  id: 2,
+                  id: '2',
                   tank_type: tankData.tank_type,
                   level_percentage: tankData.level_percentage,
                   level_liters: tankData.level_liters,
@@ -398,7 +403,7 @@ const EnhancedIndex = () => {
               if (tankData.tank_type === 'top_tank') {
                 console.log('Updating top tank:', tankData.level_percentage);
                 setTopTank({
-                  id: 1,
+                  id: '1',
                   tank_type: tankData.tank_type,
                   level_percentage: tankData.level_percentage,
                   level_liters: tankData.level_liters,
@@ -412,7 +417,7 @@ const EnhancedIndex = () => {
                 setEsp32LastSeen(new Date(tankData.timestamp));
               } else if (tankData.tank_type === 'sump_tank') {
                 setSumpTank({
-                  id: 2,
+                  id: '2',
                   tank_type: tankData.tank_type,
                   level_percentage: tankData.level_percentage,
                   level_liters: tankData.level_liters,
@@ -454,7 +459,7 @@ const EnhancedIndex = () => {
             case 'system_status': {
               const statusData = message.data as SystemStatusMessage;
               const newSystemStatus = {
-                id: 1,
+                id: '1',
                 wifi_connected: statusData.wifi_connected,
                 temperature: statusData.temperature,
                 esp32_top_status: statusData.esp32_top_status,
@@ -564,7 +569,7 @@ const EnhancedIndex = () => {
               new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
             setTopTank(latestTopTank);
 
-            const sumpTanks = tanks.value.filter((tank: TankReading) => tank.tank_type === 'sump');
+            const sumpTanks = tanks.value.filter((tank: TankReading) => tank.tank_type === 'sump_tank');
             const latestSumpTank = sumpTanks.sort((a: TankReading, b: TankReading) => 
               new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
             setSumpTank(latestSumpTank);

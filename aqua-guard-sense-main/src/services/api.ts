@@ -17,7 +17,10 @@ const communicationService = createCommunicationService()
 
 // Backend configuration (prefer explicit backend vars; no production host fallback to Supabase URL)
 export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
-const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'ws://localhost:8083'
+const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'disabled'
+
+// Cloud-only mode configuration
+const CLOUD_ONLY_MODE = import.meta.env.VITE_CLOUD_ONLY_MODE === 'true' || WS_URL === 'disabled'
 
 // Flag to use mock API when backend is not available
 const USE_MOCK_API = false // Using real ESP32 data
@@ -189,6 +192,12 @@ class ApiService {
 
   private initializeWebSocket() {
     try {
+      // Skip WebSocket initialization in cloud-only mode
+      if (CLOUD_ONLY_MODE) {
+        console.log('🌐 WebSocket disabled - using cloud-only mode with Supabase real-time')
+        return
+      }
+
       console.log('🔌 Initializing WebSocket connection...')
       console.log('WebSocket URL:', WS_URL)
 

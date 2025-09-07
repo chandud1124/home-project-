@@ -113,6 +113,17 @@ export class EnhancedCommunicationService {
 
   // Enhanced WebSocket connection with automatic reconnection
   async connectWebSocket(): Promise<void> {
+    // Skip WebSocket connection in cloud-only mode
+    if (this.config.wsUrl === 'disabled' || import.meta.env.VITE_CLOUD_ONLY_MODE === 'true') {
+      console.log('🌐 WebSocket disabled - using cloud-only mode with Supabase real-time')
+      this.updateConnectionState({
+        ...this.connectionState,
+        isOnline: true,
+        reconnectAttempts: 0
+      })
+      return Promise.resolve()
+    }
+
     return new Promise((resolve, reject) => {
       try {
         this.webSocket = new WebSocket(this.config.wsUrl)
@@ -323,11 +334,17 @@ export function createCommunicationService(): EnhancedCommunicationService {
   const config: CommunicationConfig = {
     supabase: supabase,
     backendUrl: import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001',
-    wsUrl: import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'ws://localhost:8083',
+    wsUrl: import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL || 'disabled',
     maxRetries: 5,
     retryDelay: 1000,
     connectionTimeout: 10000
   }
+
+  console.log('🌐 Communication Service Config:', {
+    cloudOnlyMode: import.meta.env.VITE_CLOUD_ONLY_MODE === 'true',
+    websocketUrl: config.wsUrl,
+    backendUrl: config.backendUrl
+  })
 
   return new EnhancedCommunicationService(config)
 }

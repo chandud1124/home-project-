@@ -1,6 +1,6 @@
 /*
- * AquaGuard - ESP32 Sump Tank Controller (Enhanced)
- * Complete hybrid system with backend communication and local control
+ * AquaGuard - ESP32 Sump Tank Controller (Enhanced + Cloud)
+ * Hybrid system with backend communication, cloud connectivity, and local control
  * 
  * Enhanced Features:
  * - Robust heartbeat system with backend health monitoring
@@ -8,7 +8,8 @@
  * - Daily automatic restart at 2:00 AM
  * - Safe relay handling during restart
  * - Comprehensive error detection and recovery
- * - Hybrid connectivity (backend + local ESP32-to-ESP32)
+ * - Hybrid connectivity (local backend + Supabase cloud + ESP32-to-ESP32)
+ * - Dual fallback communication system
  * 
  * Hardware:
  * - Ultrasonic sensor (TRIG=5, ECHO=18)
@@ -42,11 +43,17 @@
 #define BACKEND_HOST "192.168.0.108"  // Your backend server IP (actual computer IP)
 #define BACKEND_PORT 3001
 #define BACKEND_USE_HTTPS false
-#define BACKEND_ENABLED true
+#define BACKEND_ENABLED false  // DISABLED - Using cloud-only mode
+
+// ========== CLOUD CONFIGURATION (SUPABASE) ==========
+#define CLOUD_ENABLED true
+#define SUPABASE_URL "https://dwcouaacpqipvvsxiygo.supabase.co"
+#define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
 
 // ========== AUTHENTICATION ==========
-#define DEVICE_API_KEY "ba18958c539f1a4b34c3642c22097aa25ce98068d01e1340892211e8e53c5f05"
-#define DEVICE_HMAC_SECRET "f8969cad0ed93f3c759f037fafb50258e76895785ad04a9529963f70ad0d66ce"
+#define DEVICE_API_KEY "71835b2d0f91f00fb56c5ffb29f84b7c20af5f1918987e5cd91cbd89a87e321c"
+#define DEVICE_HMAC_SECRET "b095c58d61b9ac5746b7cde9c45319aa4294da4ed4e306b62a454d3b8f4c9bd5"
+
 // ========== HARDWARE PINS ==========
 #define TRIG_PIN 5
 #define ECHO_PIN 18
@@ -85,6 +92,7 @@
 #define SENSOR_READ_INTERVAL 2000
 #define HEARTBEAT_INTERVAL 30000      // Send heartbeat every 30 seconds
 #define BACKEND_CHECK_INTERVAL 60000  // Check backend every 60 seconds
+#define CLOUD_SYNC_INTERVAL 60000     // Sync with cloud every 60 seconds
 #define STATUS_REPORT_INTERVAL 30000  // Report status every 30 seconds
 #define COMMAND_CHECK_INTERVAL 10000  // Check for commands every 10 seconds
 #define WIFI_RECONNECT_DELAY 10000    // Wait 10s before WiFi reconnect
@@ -107,6 +115,7 @@ bool isAutoMode = true;
 bool motorRunning = false;
 bool systemInPanic = false;
 bool backendAvailable = false;
+bool cloudAvailable = false;
 bool wifiConnected = false;
 bool topTankNeedsWater = false;
 bool emergencyStopActive = false;
@@ -120,12 +129,14 @@ bool floatSwitchState = false;
 unsigned long lastSensorRead = 0;
 unsigned long lastHeartbeat = 0;
 unsigned long lastBackendCheck = 0;
+unsigned long lastCloudSync = 0;
 unsigned long lastStatusReport = 0;
 unsigned long lastCommandCheck = 0;
 unsigned long lastWifiConnect = 0;
 unsigned long motorStartTime = 0;
 unsigned long lastMotorStop = 0;
 unsigned long lastBackendResponse = 0;
+unsigned long lastCloudResponse = 0;
 unsigned long lastPanicCheck = 0;
 unsigned long systemStartTime = 0;
 
@@ -141,6 +152,7 @@ int buzzerRingCount = 0;
 // Error counters
 int wifiRetryCount = 0;
 int backendRetryCount = 0;
+int cloudRetryCount = 0;
 int heartbeatMissCount = 0;
 
 // ========== SETUP ==========
@@ -148,9 +160,9 @@ void setup() {
   Serial.begin(115200);
   delay(2000); // Allow serial to initialize
   
-  Serial.println("\n🚀 AquaGuard Sump Tank Controller Enhanced Starting...");
+  Serial.println("\n🚀 AquaGuard Sump Tank Controller Enhanced + Cloud Starting...");
   Serial.printf("Device ID: %s\n", DEVICE_ID);
-  Serial.printf("Firmware Version: 2.1.0\n");
+  Serial.printf("Firmware Version: 2.2.0 (Hybrid)\n");
   
   systemStartTime = millis();
   
@@ -178,11 +190,19 @@ void setup() {
   // Initialize backend connection
   checkBackendAvailability();
   
-  Serial.println("✅ Enhanced Setup Complete!");
+  // Initialize cloud connection
+  checkCloudAvailability();
+  
+  Serial.println(BACKEND_ENABLED ? "✅ Enhanced + Cloud Setup Complete!" : "✅ Cloud-Only Setup Complete!");
   Serial.printf("📊 Tank: Rectangle %.1f×%.1f×%.1fcm (%.1fL)\n", 
                 TANK_LENGTH_CM, TANK_WIDTH_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
   Serial.printf("🌐 Local IP: %s\n", WiFi.localIP().toString().c_str());
-  Serial.printf("📡 Backend: %s:%d\n", BACKEND_HOST, BACKEND_PORT);
+  if (BACKEND_ENABLED) {
+    Serial.printf("📡 Backend: %s:%d (Available: %s)\n", BACKEND_HOST, BACKEND_PORT, backendAvailable ? "Yes" : "No");
+  } else {
+    Serial.printf("📡 Backend: Disabled (Cloud-Only Mode)\n");
+  }
+  Serial.printf("☁️ Cloud: %s (Available: %s)\n", SUPABASE_URL, cloudAvailable ? "Yes" : "No");
 }
 
 // ========== MAIN LOOP ==========
@@ -219,6 +239,13 @@ void loop() {
     lastBackendCheck = currentMillis;
   }
   
+  // Check cloud availability and sync
+  if (currentMillis - lastCloudSync >= CLOUD_SYNC_INTERVAL) {
+    checkCloudAvailability();
+    syncWithCloud();
+    lastCloudSync = currentMillis;
+  }
+  
   // Send heartbeat to backend
   if (wifiConnected && backendAvailable && 
       currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
@@ -226,10 +253,15 @@ void loop() {
     lastHeartbeat = currentMillis;
   }
   
-  // Check for pending commands from backend
-  if (wifiConnected && backendAvailable && 
+  // Check for pending commands from backend and cloud
+  if (wifiConnected && 
       currentMillis - lastCommandCheck >= COMMAND_CHECK_INTERVAL) {
-    checkPendingCommands();
+    if (backendAvailable) {
+      checkPendingCommands();
+    }
+    if (cloudAvailable) {
+      checkPendingCloudCommands();
+    }
     lastCommandCheck = currentMillis;
   }
   
@@ -368,6 +400,7 @@ void setupLocalServer() {
     doc["float_switch"] = floatSwitchState;
     doc["system_panic"] = systemInPanic;
     doc["backend_available"] = backendAvailable;
+    doc["cloud_available"] = cloudAvailable;
     doc["wifi_connected"] = wifiConnected;
     doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     
@@ -378,6 +411,174 @@ void setupLocalServer() {
   
   server.begin();
   Serial.println("🌐 Local HTTP server started on port 80");
+}
+
+// ========== CLOUD FUNCTIONS ==========
+void checkCloudAvailability() {
+  if (!wifiConnected || !CLOUD_ENABLED) {
+    cloudAvailable = false;
+    return;
+  }
+  
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/devices?select=device_id&device_id=eq." + DEVICE_ID;
+  
+  if (http.begin(url)) {
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.setTimeout(10000);
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+      cloudAvailable = true;
+      cloudRetryCount = 0;
+      lastCloudResponse = millis();
+      Serial.println("☁️ Cloud available");
+    } else {
+      cloudRetryCount++;
+      Serial.printf("❌ Cloud check failed: HTTP %d\n", httpCode);
+      
+      if (cloudRetryCount >= MAX_BACKEND_RETRIES) {
+        cloudAvailable = false;
+        Serial.println("☁️ Cloud marked as unavailable");
+      }
+    }
+    
+    http.end();
+  } else {
+    Serial.println("❌ Failed to initialize HTTP client for cloud check");
+  }
+}
+
+void syncWithCloud() {
+  if (!cloudAvailable || !wifiConnected) {
+    return;
+  }
+  
+  // Send device status to cloud
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_readings";
+  
+  if (http.begin(url)) {
+    DynamicJsonDocument doc(512);
+    doc["device_id"] = DEVICE_ID;
+    doc["level_percentage"] = currentLevel;
+    doc["level_liters"] = currentVolume;
+    doc["motor_running"] = motorRunning;
+    doc["auto_mode"] = isAutoMode;
+    doc["float_switch"] = floatSwitchState;
+    doc["system_panic"] = systemInPanic;
+    doc["wifi_rssi"] = WiFi.RSSI();
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.addHeader("Prefer", "return=minimal");
+    http.setTimeout(15000);
+    
+    int httpCode = http.POST(payload);
+    
+    if (httpCode == 201 || httpCode == 200) {
+      Serial.println("☁️ Data synced to cloud successfully");
+      lastCloudResponse = millis();
+    } else {
+      Serial.printf("❌ Cloud sync failed: HTTP %d\n", httpCode);
+      String errorResponse = http.getString();
+      Serial.printf("❌ Error response: %s\n", errorResponse.c_str());
+    }
+    
+    http.end();
+  }
+}
+
+void checkPendingCloudCommands() {
+  if (!cloudAvailable || !wifiConnected) {
+    return;
+  }
+  
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?select=*&device_id=eq." + DEVICE_ID + "&status=eq.pending&order=created_at.asc";
+  
+  if (http.begin(url)) {
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.setTimeout(10000);
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+      String response = http.getString();
+      
+      DynamicJsonDocument doc(2048);
+      DeserializationError error = deserializeJson(doc, response);
+      
+      if (!error) {
+        JsonArray commands = doc.as<JsonArray>();
+        Serial.printf("☁️ Found %d pending cloud commands\n", commands.size());
+        
+        for (JsonObject command : commands) {
+          String commandId = command["id"];
+          String commandType = command["command_type"];
+          JsonObject payload = command["payload"];
+          
+          Serial.printf("☁️ Processing cloud command: %s (%s)\n", commandType.c_str(), commandId.c_str());
+          
+          if (commandType == "motor_control") {
+            processMotorCommand(commandId, payload);
+          } else if (commandType == "emergency_stop") {
+            processEmergencyStop(commandId, payload);
+          } else if (commandType == "emergency_reset") {
+            processEmergencyReset(commandId, payload);
+          }
+          
+          // Acknowledge the cloud command
+          acknowledgeCloudCommand(commandId, "processed");
+        }
+      } else {
+        Serial.println("❌ Failed to parse cloud commands JSON");
+      }
+    } else if (httpCode != 404) { // 404 means no commands, which is normal
+      Serial.printf("❌ Failed to fetch cloud commands: HTTP %d\n", httpCode);
+    }
+    
+    http.end();
+  }
+}
+
+void acknowledgeCloudCommand(String commandId, String status) {
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?id=eq." + commandId;
+  
+  if (http.begin(url)) {
+    DynamicJsonDocument doc(128);
+    doc["status"] = status;
+    doc["processed_at"] = "now()";
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.addHeader("Prefer", "return=minimal");
+    http.setTimeout(10000);
+    
+    int httpCode = http.PATCH(payload);
+    
+    if (httpCode == 200 || httpCode == 204) {
+      Serial.printf("☁️ Cloud command %s acknowledged\n", commandId.c_str());
+    } else {
+      Serial.printf("❌ Failed to acknowledge cloud command %s: HTTP %d\n", commandId.c_str(), httpCode);
+    }
+    
+    http.end();
+  }
 }
 
 // ========== SENSOR FUNCTIONS ==========
@@ -495,7 +696,7 @@ void sendHeartbeat() {
   }
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/heartbeat";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/heartbeat";
   
   Serial.printf("📤 Sending heartbeat to: %s\n", url.c_str());
   
@@ -594,7 +795,7 @@ void checkPendingCommands() {
   }
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/commands/" + DEVICE_ID;
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/commands/" + DEVICE_ID;
   
   if (http.begin(url)) {
     http.addHeader("x-device-id", DEVICE_ID);
@@ -763,7 +964,7 @@ void processEmergencyReset(String commandId, JsonObject payload) {
 
 void acknowledgeCommand(String commandId, String status) {
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/commands/" + commandId + "/ack";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/commands/" + commandId + "/ack";
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(128);
@@ -846,8 +1047,9 @@ void checkPanicConditions(unsigned long currentMillis) {
       delay(200);
     }
     
-    // Try to report panic to backend
+    // Try to report panic to backend and cloud
     reportPanicToBackend(panicReason);
+    reportPanicToCloud(panicReason);
     
     delay(5000); // Allow time for panic report
     
@@ -857,10 +1059,10 @@ void checkPanicConditions(unsigned long currentMillis) {
 }
 
 void reportPanicToBackend(String reason) {
-  if (!wifiConnected) return;
+  if (!wifiConnected || !backendAvailable) return;
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/panic";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/panic";
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(256);
@@ -879,7 +1081,40 @@ void reportPanicToBackend(String reason) {
     http.addHeader("x-api-key", DEVICE_API_KEY);
     
     int httpCode = http.POST(payload);
-    Serial.printf("📤 Panic report sent: %d\n", httpCode);
+    Serial.printf("📤 Panic report sent to backend: %d\n", httpCode);
+    
+    http.end();
+  }
+}
+
+void reportPanicToCloud(String reason) {
+  if (!wifiConnected || !cloudAvailable) return;
+  
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_alerts";
+  
+  if (http.begin(url)) {
+    DynamicJsonDocument doc(512);
+    doc["device_id"] = DEVICE_ID;
+    doc["alert_type"] = "panic_mode";
+    doc["severity"] = "critical";
+    doc["message"] = reason;
+    doc["level_percentage"] = currentLevel;
+    doc["motor_running"] = motorRunning;
+    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["metadata"] = JsonObject();
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.addHeader("Prefer", "return=minimal");
+    
+    int httpCode = http.POST(payload);
+    Serial.printf("☁️ Panic report sent to cloud: %d\n", httpCode);
     
     http.end();
   }
@@ -920,7 +1155,7 @@ void checkDailyRestart() {
 
 void reportScheduledRestart() {
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/scheduled-restart";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/scheduled-restart";
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(128);
@@ -948,6 +1183,7 @@ void maintainWiFiConnection() {
       Serial.println("📡 WiFi disconnected");
       wifiConnected = false;
       backendAvailable = false;
+      cloudAvailable = false;
     }
     
     wifiRetryCount++;
@@ -969,8 +1205,9 @@ void maintainWiFiConnection() {
         wifiConnected = true;
         wifiRetryCount = 0;
         Serial.println("✅ WiFi reconnected!");
-        // Check backend availability after WiFi reconnection
+        // Check backend and cloud availability after WiFi reconnection
         checkBackendAvailability();
+        checkCloudAvailability();
       }
     } else {
       Serial.println("❌ WiFi reconnection failed - operating in local mode only");
@@ -984,13 +1221,19 @@ void maintainWiFiConnection() {
 
 // ========== BACKEND COMMUNICATION ==========
 bool checkBackendAvailability() {
+  // If backend is disabled, always return false
+  if (!BACKEND_ENABLED) {
+    backendAvailable = false;
+    return false;
+  }
+  
   if (!wifiConnected) {
     backendAvailable = false;
     return false;
   }
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/ping";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/ping";
   
   if (http.begin(url)) {
     http.setTimeout(5000); // 5 second timeout
@@ -1025,7 +1268,7 @@ void sendSensorDataToBackend() {
   if (!backendAvailable || !wifiConnected) return;
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/sensor-data";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/sensor-data";
   
   if (http.begin(url)) {
     String timestamp = String(millis());
@@ -1095,11 +1338,14 @@ void autoMotorControl() {
     }
   }
   
-  // Check start conditions - simplified logic without topTankNeedsWater dependency
+  // Check start conditions - with topTankNeedsWater consideration
   if (!motorRunning && !shouldStopMotor) {
     if (floatSwitchState && currentLevel >= AUTO_START_LEVEL && currentLevel < SUMP_HIGH_LEVEL) {
-      shouldStartMotor = true;
-      reason = "Auto start conditions met";
+      // Enhanced logic: Start if we have water and either auto level reached OR top tank needs water
+      if (topTankNeedsWater || currentLevel >= AUTO_START_LEVEL) {
+        shouldStartMotor = true;
+        reason = topTankNeedsWater ? "Top tank needs water" : "Auto start conditions met";
+      }
     }
   }
   
@@ -1175,9 +1421,12 @@ void handleSwitches() {
           Serial.printf("🔧 Manual override: Motor OFF\n");
         }
         
-        // Report switch action to backend immediately
+        // Report switch action to backend and cloud immediately
         if (wifiConnected && backendAvailable) {
           reportSystemStatus();
+        }
+        if (wifiConnected && cloudAvailable) {
+          syncWithCloud();
         }
       } else {
         Serial.println("⚠️ Manual motor blocked - Float switch safety");
@@ -1237,7 +1486,9 @@ void handleBuzzer() {
 
 // ========== STATUS REPORTING ==========
 void reportSystemStatus() {
-  Serial.println("\n========== ENHANCED SYSTEM STATUS ==========");
+  Serial.println(BACKEND_ENABLED ? 
+    "\n========== ENHANCED + CLOUD SYSTEM STATUS ==========" :
+    "\n========== CLOUD-ONLY SYSTEM STATUS ==========");
   Serial.printf("Device: %s (Uptime: %lu min)\n", DEVICE_ID, (millis() - systemStartTime) / 60000);
   Serial.printf("Tank: Rectangle %.1f×%.1f×%.1fcm (%.1fL capacity)\n", 
                 TANK_LENGTH_CM, TANK_WIDTH_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
@@ -1255,9 +1506,14 @@ void reportSystemStatus() {
     Serial.printf(" (%d dBm)", WiFi.RSSI());
   }
   Serial.println();
-  Serial.printf("Backend: %s", backendAvailable ? "Available" : "Unavailable");
-  if (backendAvailable && lastBackendResponse > 0) {
+  Serial.printf("Backend: %s", BACKEND_ENABLED ? (backendAvailable ? "Available" : "Unavailable") : "Disabled (Cloud-Only Mode)");
+  if (BACKEND_ENABLED && backendAvailable && lastBackendResponse > 0) {
     Serial.printf(" (Last response: %lu sec ago)", (millis() - lastBackendResponse) / 1000);
+  }
+  Serial.println();
+  Serial.printf("Cloud: %s", cloudAvailable ? "Available" : "Unavailable");
+  if (cloudAvailable && lastCloudResponse > 0) {
+    Serial.printf(" (Last response: %lu sec ago)", (millis() - lastCloudResponse) / 1000);
   }
   Serial.println();
   Serial.printf("Top Tank Command: %s\n", topTankNeedsWater ? "NEEDS WATER" : "NO REQUEST");
@@ -1269,5 +1525,5 @@ void reportSystemStatus() {
     Serial.printf("Current Time: %02d:%02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   }
   
-  Serial.println("==========================================\n");
+  Serial.println("====================================================\n");
 }

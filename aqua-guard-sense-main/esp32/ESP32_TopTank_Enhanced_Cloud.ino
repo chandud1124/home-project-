@@ -1,29 +1,26 @@
 /*
- * AquaGuard - ESP32 Sump Tank Controller (Enhanced)
- * Complete hybrid system with backend communication and local control
+ * AquaGuard - ESP32 Top Tank Monitor (Enhanced + Cloud)
+ * Hybrid system with backend communication, cloud connectivity, and local control
  * 
  * Enhanced Features:
  * - Robust heartbeat system with backend health monitoring
  * - Smart restart logic (panic mode only, not WiFi disconnection)
  * - Daily automatic restart at 2:00 AM
- * - Safe relay handling during restart
  * - Comprehensive error detection and recovery
- * - Hybrid connectivity (backend + local ESP32-to-ESP32)
+ * - Hybrid connectivity (local backend + Supabase cloud + ESP32-to-ESP32)
+ * - Dual fallback communication system
  * 
  * Hardware:
  * - Ultrasonic sensor (TRIG=5, ECHO=18)
- * - Float switch safety (GPIO 4) 
- * - Motor relay control (GPIO 13)
- * - LED indicators and buzzer alarm
- * - Manual switches for override control
+ * - Status LED and buzzer for alerts
+ * - Cylindrical tank monitoring and motor control commands
  * 
- * Tank: Rectangular 230×230×250cm (1322L capacity)
+ * Tank: Cylindrical Ø103cm × 120cm (1000L capacity)
  */
 
 // ========== LIBRARIES ==========
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <WebServer.h>
 #include <ArduinoJson.h>
 #include <mbedtls/md.h>
 #include <esp_system.h>
@@ -31,8 +28,8 @@
 #include <time.h>
 
 // ========== DEVICE CONFIGURATION ==========
-#define DEVICE_ID "SUMP_TANK"
-#define DEVICE_NAME "Sump Tank"
+#define DEVICE_ID "TOP_TANK"
+#define DEVICE_NAME "Top Tank"
 
 // ========== WIFI CONFIGURATION ==========
 #define WIFI_SSID "I am Not A Witch I am Your Wifi"
@@ -42,96 +39,83 @@
 #define BACKEND_HOST "192.168.0.108"  // Your backend server IP (actual computer IP)
 #define BACKEND_PORT 3001
 #define BACKEND_USE_HTTPS false
-#define BACKEND_ENABLED true
+#define BACKEND_ENABLED false  // DISABLED - Using cloud-only mode
+
+// ========== SUMP ESP32 CONFIGURATION ==========
+#define SUMP_ESP32_IP "192.168.0.107"  // IP of the Sump Tank ESP32
+#define SUMP_ESP32_PORT 80
+
+// ========== CLOUD CONFIGURATION (SUPABASE) ==========
+#define CLOUD_ENABLED true
+#define SUPABASE_URL "https://dwcouaacpqipvvsxiygo.supabase.co"
+#define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
 
 // ========== AUTHENTICATION ==========
-#define DEVICE_API_KEY "ba18958c539f1a4b34c3642c22097aa25ce98068d01e1340892211e8e53c5f05"
-#define DEVICE_HMAC_SECRET "f8969cad0ed93f3c759f037fafb50258e76895785ad04a9529963f70ad0d66ce"
+#define DEVICE_API_KEY "993fbea1a7aa7bcdbc1b9af943c0836db68cb6080ce772d0a0570708517c1318"
+#define DEVICE_HMAC_SECRET "ed85bbf0607cb4371a3456618097d7cf46674d8fd929c19ec212bd23162fb485"
+
 // ========== HARDWARE PINS ==========
 #define TRIG_PIN 5
 #define ECHO_PIN 18
-#define FLOAT_SWITCH_PIN 4
-#define MOTOR_RELAY_PIN 13
 #define BUZZER_PIN 14
-#define AUTO_MODE_LED_PIN 16
-#define SUMP_FULL_LED_PIN 17
-#define SUMP_LOW_LED_PIN 21
-#define MANUAL_MOTOR_SWITCH_PIN 25
-#define MODE_SWITCH_PIN 26
+#define LED_PIN 15
 
-// ========== RELAY CONFIGURATION ==========
-// Set to true if your relay module is ACTIVE LOW (LOW = ON, HIGH = OFF)
-// Set to false if your relay module is ACTIVE HIGH (HIGH = ON, LOW = OFF)
-#define RELAY_ACTIVE_LOW true
-
-#define RELAY_ON (RELAY_ACTIVE_LOW ? LOW : HIGH)
-#define RELAY_OFF (RELAY_ACTIVE_LOW ? HIGH : LOW)
-
-// ========== TANK CONFIGURATION ==========
-#define TANK_HEIGHT_CM 250.0
-#define TANK_LENGTH_CM 230.0
-#define TANK_WIDTH_CM 230.0
-#define TANK_CAPACITY_LITERS 1322.5
+// ========== TANK CONFIGURATION - CYLINDRICAL ==========
+#define TANK_HEIGHT_CM 120.0
+#define TANK_RADIUS_CM 51.5
+#define TANK_DIAMETER_CM 103.0
+#define TANK_CAPACITY_LITERS 1000.0
 #define SENSOR_OFFSET_CM 10.0
 
 // ========== CONTROL LEVELS ==========
-#define SUMP_LOW_LEVEL 25.0
-#define SUMP_HIGH_LEVEL 85.0
-#define SUMP_CRITICAL_LEVEL 90.0
-#define AUTO_START_LEVEL 75.0
-#define AUTO_STOP_LEVEL 25.0
+#define LOW_LEVEL_THRESHOLD 20.0
+#define CRITICAL_LEVEL_THRESHOLD 10.0
+#define MOTOR_START_LEVEL 30.0
+#define MOTOR_STOP_LEVEL 90.0
 
 // ========== TIMING CONFIGURATION ==========
-#define SENSOR_READ_INTERVAL 2000
+#define SENSOR_READ_INTERVAL 3000
 #define HEARTBEAT_INTERVAL 30000      // Send heartbeat every 30 seconds
 #define BACKEND_CHECK_INTERVAL 60000  // Check backend every 60 seconds
+#define CLOUD_SYNC_INTERVAL 60000     // Sync with cloud every 60 seconds
 #define STATUS_REPORT_INTERVAL 30000  // Report status every 30 seconds
 #define COMMAND_CHECK_INTERVAL 10000  // Check for commands every 10 seconds
+#define MOTOR_COMMAND_INTERVAL 15000  // Send motor commands every 15 seconds
 #define WIFI_RECONNECT_DELAY 10000    // Wait 10s before WiFi reconnect
 #define PANIC_THRESHOLD_MS 300000     // 5 minutes of no response = panic
 #define DAILY_RESTART_HOUR 2          // Restart at 2:00 AM
 #define WATCHDOG_TIMEOUT_S 30         // Watchdog timeout
-#define LOCAL_SERVER_PORT 80
 
 // ========== SAFETY & ERROR HANDLING ==========
 #define MAX_WIFI_RETRIES 3
 #define MAX_BACKEND_RETRIES 3
-#define MOTOR_MAX_RUNTIME_MS 1800000  // 30 minutes max motor runtime
-#define MOTOR_COOLDOWN_MS 300000      // 5 minutes cooldown between runs
 
 // ========== GLOBAL VARIABLES ==========
-WebServer server(LOCAL_SERVER_PORT);
-
 // System state
-bool isAutoMode = true;
-bool motorRunning = false;
 bool systemInPanic = false;
 bool backendAvailable = false;
+bool cloudAvailable = false;
 bool wifiConnected = false;
-bool topTankNeedsWater = false;
-bool emergencyStopActive = false;
+bool sumpESP32Available = false;
+bool lastMotorCommand = false;  // false = stop, true = start
 
 // Sensor data
 float currentLevel = 0.0;
 float currentVolume = 0.0;
-bool floatSwitchState = false;
 
 // Timing variables
 unsigned long lastSensorRead = 0;
 unsigned long lastHeartbeat = 0;
 unsigned long lastBackendCheck = 0;
+unsigned long lastCloudSync = 0;
 unsigned long lastStatusReport = 0;
 unsigned long lastCommandCheck = 0;
+unsigned long lastMotorCommand = 0;
 unsigned long lastWifiConnect = 0;
-unsigned long motorStartTime = 0;
-unsigned long lastMotorStop = 0;
 unsigned long lastBackendResponse = 0;
+unsigned long lastCloudResponse = 0;
 unsigned long lastPanicCheck = 0;
 unsigned long systemStartTime = 0;
-
-// Switch states
-bool lastMotorSwitchState = HIGH;
-bool lastModeSwitchState = HIGH;
 
 // LED and buzzer
 unsigned long lastLedBlink = 0;
@@ -141,6 +125,7 @@ int buzzerRingCount = 0;
 // Error counters
 int wifiRetryCount = 0;
 int backendRetryCount = 0;
+int cloudRetryCount = 0;
 int heartbeatMissCount = 0;
 
 // ========== SETUP ==========
@@ -148,17 +133,11 @@ void setup() {
   Serial.begin(115200);
   delay(2000); // Allow serial to initialize
   
-  Serial.println("\n🚀 AquaGuard Sump Tank Controller Enhanced Starting...");
+  Serial.println("\n🚀 AquaGuard Top Tank Monitor Enhanced + Cloud Starting...");
   Serial.printf("Device ID: %s\n", DEVICE_ID);
-  Serial.printf("Firmware Version: 2.1.0\n");
+  Serial.printf("Firmware Version: 2.2.0 (Hybrid)\n");
   
   systemStartTime = millis();
-  
-  // CRITICAL: Initialize relay to OFF immediately for safety
-  pinMode(MOTOR_RELAY_PIN, OUTPUT);
-  digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
-  motorRunning = false;
-  Serial.println("🔒 SAFETY: Motor relay initialized to OFF");
   
   // Initialize all pins
   initializePins();
@@ -172,17 +151,22 @@ void setup() {
   // Setup NTP for time synchronization
   setupNTP();
   
-  // Setup local HTTP server
-  setupLocalServer();
-  
   // Initialize backend connection
   checkBackendAvailability();
   
-  Serial.println("✅ Enhanced Setup Complete!");
-  Serial.printf("📊 Tank: Rectangle %.1f×%.1f×%.1fcm (%.1fL)\n", 
-                TANK_LENGTH_CM, TANK_WIDTH_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
+  // Initialize cloud connection
+  checkCloudAvailability();
+  
+  // Check Sump ESP32 availability
+  checkSumpESP32Availability();
+  
+  Serial.println("✅ Enhanced + Cloud Setup Complete!");
+  Serial.printf("📊 Tank: Cylinder Ø%.1fcm × %.1fcm (%.1fL)\n", 
+                TANK_DIAMETER_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
   Serial.printf("🌐 Local IP: %s\n", WiFi.localIP().toString().c_str());
-  Serial.printf("📡 Backend: %s:%d\n", BACKEND_HOST, BACKEND_PORT);
+  Serial.printf("📡 Backend: %s:%d (Available: %s)\n", BACKEND_HOST, BACKEND_PORT, backendAvailable ? "Yes" : "No");
+  Serial.printf("☁️ Cloud: %s (Available: %s)\n", SUPABASE_URL, cloudAvailable ? "Yes" : "No");
+  Serial.printf("⚙️ Sump ESP32: %s:%d (Available: %s)\n", SUMP_ESP32_IP, SUMP_ESP32_PORT, sumpESP32Available ? "Yes" : "No");
 }
 
 // ========== MAIN LOOP ==========
@@ -191,9 +175,6 @@ void loop() {
   
   // Feed watchdog to prevent unnecessary resets
   esp_task_wdt_reset();
-  
-  // Handle local HTTP server
-  server.handleClient();
   
   // Check for daily restart (2:00 AM)
   checkDailyRestart();
@@ -216,7 +197,15 @@ void loop() {
   // Check backend availability
   if (currentMillis - lastBackendCheck >= BACKEND_CHECK_INTERVAL) {
     checkBackendAvailability();
+    checkSumpESP32Availability();
     lastBackendCheck = currentMillis;
+  }
+  
+  // Check cloud availability and sync
+  if (currentMillis - lastCloudSync >= CLOUD_SYNC_INTERVAL) {
+    checkCloudAvailability();
+    syncWithCloud();
+    lastCloudSync = currentMillis;
   }
   
   // Send heartbeat to backend
@@ -226,27 +215,27 @@ void loop() {
     lastHeartbeat = currentMillis;
   }
   
-  // Check for pending commands from backend
-  if (wifiConnected && backendAvailable && 
+  // Check for pending commands from backend and cloud
+  if (wifiConnected && 
       currentMillis - lastCommandCheck >= COMMAND_CHECK_INTERVAL) {
-    checkPendingCommands();
+    if (backendAvailable) {
+      checkPendingCommands();
+    }
+    if (cloudAvailable) {
+      checkPendingCloudCommands();
+    }
     lastCommandCheck = currentMillis;
   }
   
-  // Handle manual switches
-  handleSwitches();
-  
-  // Update LEDs and buzzer
-  updateLEDs();
-  handleBuzzer();
-  
-  // Auto motor control with safety checks
-  if (isAutoMode && !systemInPanic) {
-    autoMotorControl();
+  // Send motor control commands to Sump ESP32
+  if (currentMillis - lastMotorCommand >= MOTOR_COMMAND_INTERVAL) {
+    controlSumpMotor();
+    lastMotorCommand = currentMillis;
   }
   
-  // Safety: Check motor runtime
-  checkMotorSafety();
+  // Update LEDs and buzzer
+  updateLED();
+  handleBuzzer();
   
   // Report system status periodically
   if (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL) {
@@ -260,27 +249,16 @@ void initializePins() {
   // Sensor pins
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-  pinMode(FLOAT_SWITCH_PIN, INPUT_PULLUP);
   
-  // Control pins (relay already initialized in setup for safety)
+  // Output pins
+  pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   
-  // LED pins
-  pinMode(AUTO_MODE_LED_PIN, OUTPUT);
-  pinMode(SUMP_FULL_LED_PIN, OUTPUT);
-  pinMode(SUMP_LOW_LED_PIN, OUTPUT);
-  
-  // Switch pins
-  pinMode(MANUAL_MOTOR_SWITCH_PIN, INPUT_PULLUP);
-  pinMode(MODE_SWITCH_PIN, INPUT_PULLUP);
-  
-  // Initialize outputs to safe state
+  // Initialize outputs
+  digitalWrite(LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
-  digitalWrite(AUTO_MODE_LED_PIN, HIGH); // Auto mode by default
-  digitalWrite(SUMP_FULL_LED_PIN, LOW);
-  digitalWrite(SUMP_LOW_LED_PIN, LOW);
   
-  Serial.println("📌 All pins initialized safely");
+  Serial.println("📌 All pins initialized");
 }
 
 void setupWatchdog() {
@@ -327,57 +305,168 @@ void setupNTP() {
   }
 }
 
-void setupLocalServer() {
-  // Motor control endpoint for Top Tank ESP32
-  server.on("/motor", HTTP_POST, []() {
-    if (server.hasArg("plain")) {
-      DynamicJsonDocument doc(256);
-      deserializeJson(doc, server.arg("plain"));
-      
-      String command = doc["command"];
-      String deviceId = doc["device_id"];
-      
-      if (deviceId == "TOP_TANK" && !systemInPanic) {
-        if (command == "start" && floatSwitchState) {
-          topTankNeedsWater = true;
-          server.send(200, "application/json", "{\"status\":\"command_received\",\"action\":\"start\"}");
-          Serial.println("📨 Top Tank requests motor START");
-        } else if (command == "stop") {
-          topTankNeedsWater = false;
-          server.send(200, "application/json", "{\"status\":\"command_received\",\"action\":\"stop\"}");
-          Serial.println("📨 Top Tank requests motor STOP");
-        } else {
-          server.send(400, "application/json", "{\"error\":\"invalid_command_or_unsafe\"}");
-        }
-      } else {
-        server.send(401, "application/json", "{\"error\":\"unauthorized_or_panic_mode\"}");
-      }
-    } else {
-      server.send(400, "application/json", "{\"error\":\"no_data\"}");
-    }
-  });
+// ========== CLOUD FUNCTIONS ==========
+void checkCloudAvailability() {
+  if (!wifiConnected || !CLOUD_ENABLED) {
+    cloudAvailable = false;
+    return;
+  }
   
-  // Status endpoint
-  server.on("/status", HTTP_GET, []() {
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/devices?select=device_id&device_id=eq." + DEVICE_ID;
+  
+  if (http.begin(url)) {
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.setTimeout(10000);
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+      cloudAvailable = true;
+      cloudRetryCount = 0;
+      lastCloudResponse = millis();
+      Serial.println("☁️ Cloud available");
+    } else {
+      cloudRetryCount++;
+      Serial.printf("❌ Cloud check failed: HTTP %d\n", httpCode);
+      
+      if (cloudRetryCount >= MAX_BACKEND_RETRIES) {
+        cloudAvailable = false;
+        Serial.println("☁️ Cloud marked as unavailable");
+      }
+    }
+    
+    http.end();
+  } else {
+    Serial.println("❌ Failed to initialize HTTP client for cloud check");
+  }
+}
+
+void syncWithCloud() {
+  if (!cloudAvailable || !wifiConnected) {
+    return;
+  }
+  
+  // Send device status to cloud
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_readings";
+  
+  if (http.begin(url)) {
     DynamicJsonDocument doc(512);
     doc["device_id"] = DEVICE_ID;
     doc["level_percentage"] = currentLevel;
     doc["level_liters"] = currentVolume;
-    doc["motor_running"] = motorRunning;
-    doc["auto_mode"] = isAutoMode;
-    doc["float_switch"] = floatSwitchState;
-    doc["system_panic"] = systemInPanic;
-    doc["backend_available"] = backendAvailable;
-    doc["wifi_connected"] = wifiConnected;
+    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
+    doc["low_level_alert"] = currentLevel <= LOW_LEVEL_THRESHOLD;
+    doc["critical_level_alert"] = currentLevel <= CRITICAL_LEVEL_THRESHOLD;
+    doc["sump_available"] = sumpESP32Available;
+    doc["wifi_rssi"] = WiFi.RSSI();
+    doc["free_heap"] = ESP.getFreeHeap();
     doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     
-    String response;
-    serializeJson(doc, response);
-    server.send(200, "application/json", response);
-  });
+    String payload;
+    serializeJson(doc, payload);
+    
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.addHeader("Prefer", "return=minimal");
+    http.setTimeout(15000);
+    
+    int httpCode = http.POST(payload);
+    
+    if (httpCode == 201 || httpCode == 200) {
+      Serial.println("☁️ Data synced to cloud successfully");
+      lastCloudResponse = millis();
+    } else {
+      Serial.printf("❌ Cloud sync failed: HTTP %d\n", httpCode);
+      String errorResponse = http.getString();
+      Serial.printf("❌ Error response: %s\n", errorResponse.c_str());
+    }
+    
+    http.end();
+  }
+}
+
+void checkPendingCloudCommands() {
+  if (!cloudAvailable || !wifiConnected) {
+    return;
+  }
   
-  server.begin();
-  Serial.println("🌐 Local HTTP server started on port 80");
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?select=*&device_id=eq." + DEVICE_ID + "&status=eq.pending&order=created_at.asc";
+  
+  if (http.begin(url)) {
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.setTimeout(10000);
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+      String response = http.getString();
+      
+      DynamicJsonDocument doc(2048);
+      DeserializationError error = deserializeJson(doc, response);
+      
+      if (!error) {
+        JsonArray commands = doc.as<JsonArray>();
+        Serial.printf("☁️ Found %d pending cloud commands\n", commands.size());
+        
+        for (JsonObject command : commands) {
+          String commandId = command["id"];
+          String commandType = command["command_type"];
+          JsonObject payload = command["payload"];
+          
+          Serial.printf("☁️ Processing cloud command: %s (%s)\n", commandType.c_str(), commandId.c_str());
+          
+          if (commandType == "motor_control") {
+            processMotorControlCommand(commandId, payload);
+          }
+          
+          // Acknowledge the cloud command
+          acknowledgeCloudCommand(commandId, "processed");
+        }
+      } else {
+        Serial.println("❌ Failed to parse cloud commands JSON");
+      }
+    } else if (httpCode != 404) { // 404 means no commands, which is normal
+      Serial.printf("❌ Failed to fetch cloud commands: HTTP %d\n", httpCode);
+    }
+    
+    http.end();
+  }
+}
+
+void acknowledgeCloudCommand(String commandId, String status) {
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_commands?id=eq." + commandId;
+  
+  if (http.begin(url)) {
+    DynamicJsonDocument doc(128);
+    doc["status"] = status;
+    doc["processed_at"] = "now()";
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.addHeader("Prefer", "return=minimal");
+    http.setTimeout(10000);
+    
+    int httpCode = http.PATCH(payload);
+    
+    if (httpCode == 200 || httpCode == 204) {
+      Serial.printf("☁️ Cloud command %s acknowledged\n", commandId.c_str());
+    } else {
+      Serial.printf("❌ Failed to acknowledge cloud command %s: HTTP %d\n", commandId.c_str(), httpCode);
+    }
+    
+    http.end();
+  }
 }
 
 // ========== SENSOR FUNCTIONS ==========
@@ -445,9 +534,9 @@ void readSensors() {
         invalidReadingCount = 0;
       }
       
-      // Calculate volume for rectangular tank using the already calculated effectiveHeight
+      // Calculate volume for cylindrical tank using the already calculated effectiveHeight
       float waterHeightFromLevel = (newLevel / 100.0) * effectiveHeight;
-      newVolume = (TANK_LENGTH_CM * TANK_WIDTH_CM * waterHeightFromLevel) / 1000.0;
+      newVolume = PI * TANK_RADIUS_CM * TANK_RADIUS_CM * waterHeightFromLevel / 1000.0;
     } else {
       invalidReadingCount++;
       Serial.printf("⚠️ Distance out of range: %.1fcm\n", distance);
@@ -463,16 +552,13 @@ void readSensors() {
     currentVolume = newVolume;
   }
   
-  // Read float switch
-  floatSwitchState = digitalRead(FLOAT_SWITCH_PIN) == LOW;
-  
   // Enhanced logging with error count
   if (invalidReadingCount > 0) {
-    Serial.printf("📊 Tank: %.1f%% (%.1fL) | Float: %s | Errors: %d\n", 
-                  currentLevel, currentVolume, floatSwitchState ? "OK" : "LOW", invalidReadingCount);
+    Serial.printf("📊 Top Tank: %.1f%% (%.1fL) | Errors: %d\n", 
+                  currentLevel, currentVolume, invalidReadingCount);
   } else {
-    Serial.printf("📊 Tank: %.1f%% (%.1fL) | Float: %s\n", 
-                  currentLevel, currentVolume, floatSwitchState ? "OK" : "LOW");
+    Serial.printf("📊 Top Tank: %.1f%% (%.1fL)\n", 
+                  currentLevel, currentVolume);
   }
   
   // Reset error count periodically
@@ -495,7 +581,7 @@ void sendHeartbeat() {
   }
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/heartbeat";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/heartbeat";
   
   Serial.printf("📤 Sending heartbeat to: %s\n", url.c_str());
   
@@ -506,8 +592,7 @@ void sendHeartbeat() {
     doc["device_id"] = DEVICE_ID;
     doc["status"] = "alive";
     doc["level_percentage"] = currentLevel;
-    doc["motor_running"] = motorRunning;
-    doc["auto_mode"] = isAutoMode;
+    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
     doc["connection_state"] = "connected";
     doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     doc["free_heap"] = ESP.getFreeHeap();
@@ -594,7 +679,7 @@ void checkPendingCommands() {
   }
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/commands/" + DEVICE_ID;
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/commands/" + DEVICE_ID;
   
   if (http.begin(url)) {
     http.addHeader("x-device-id", DEVICE_ID);
@@ -621,11 +706,7 @@ void checkPendingCommands() {
           Serial.printf("🎯 Processing command: %s (%s)\n", commandType.c_str(), commandId.c_str());
           
           if (commandType == "motor_control") {
-            processMotorCommand(commandId, payload);
-          } else if (commandType == "emergency_stop") {
-            processEmergencyStop(commandId, payload);
-          } else if (commandType == "emergency_reset") {
-            processEmergencyReset(commandId, payload);
+            processMotorControlCommand(commandId, payload);
           }
           
           // Acknowledge the command
@@ -642,128 +723,26 @@ void checkPendingCommands() {
   }
 }
 
-void processMotorCommand(String commandId, JsonObject payload) {
+void processMotorControlCommand(String commandId, JsonObject payload) {
   String action = payload["action"];
-  bool manual = payload["manual"] | false;
   
-  Serial.printf("🎛️ Motor command: %s (manual: %s)\n", action.c_str(), manual ? "true" : "false");
-  
-  // Check for emergency stop state first
-  if (emergencyStopActive && action == "start") {
-    Serial.printf("❌ Motor start blocked - Emergency stop active\n");
-    acknowledgeCommand(commandId, "failed_emergency_stop_active");
-    return;
-  }
+  Serial.printf("🎛️ Motor control command: %s\n", action.c_str());
   
   if (action == "start") {
-    // Safety checks before starting motor
-    if (floatSwitchState && !systemInPanic) {
-      digitalWrite(MOTOR_RELAY_PIN, RELAY_ON);
-      motorRunning = true;
-      motorStartTime = millis();
-      Serial.printf("✅ Motor started via command %s\n", commandId.c_str());
-      
-      // If this is a manual command, temporarily disable auto mode
-      if (manual) {
-        isAutoMode = false;
-        digitalWrite(AUTO_MODE_LED_PIN, LOW);
-        Serial.println("🔧 Auto mode disabled for manual control");
-      }
-    } else {
-      Serial.printf("❌ Motor start blocked - Float: %s, Panic: %s\n", 
-                    floatSwitchState ? "OK" : "LOW", systemInPanic ? "YES" : "NO");
-    }
+    lastMotorCommand = true;
+    Serial.printf("✅ Motor start command received via %s\n", commandId.c_str());
   } else if (action == "stop") {
-    digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
-    if (motorRunning) {
-      motorRunning = false;
-      lastMotorStop = millis();
-      Serial.printf("✅ Motor stopped via command %s\n", commandId.c_str());
-    }
-    
-    // Re-enable auto mode after manual stop
-    if (manual && !isAutoMode) {
-      isAutoMode = true;
-      digitalWrite(AUTO_MODE_LED_PIN, HIGH);
-      Serial.println("🔄 Auto mode re-enabled");
-    }
-  }
-}
-
-void processEmergencyStop(String commandId, JsonObject payload) {
-  Serial.printf("🚨 EMERGENCY STOP COMMAND RECEIVED: %s\n", commandId.c_str());
-  
-  // Immediate motor shutdown - no safety checks, highest priority
-  digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
-  
-  if (motorRunning) {
-    motorRunning = false;
-    lastMotorStop = millis();
-    Serial.println("🛑 MOTOR FORCE STOPPED - EMERGENCY SHUTDOWN");
+    lastMotorCommand = false;
+    Serial.printf("✅ Motor stop command received via %s\n", commandId.c_str());
   }
   
-  // Force disable auto mode to prevent automatic restart
-  isAutoMode = false;
-  digitalWrite(AUTO_MODE_LED_PIN, LOW);
-  Serial.println("🔒 AUTO MODE DISABLED - Emergency Stop Active");
-  
-  // Sound emergency buzzer pattern (5 quick beeps)
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(100);
-    digitalWrite(BUZZER_PIN, LOW);
-    delay(100);
-  }
-  
-  // Set system in temporary emergency state
-  systemInPanic = true;
-  emergencyStopActive = true;
-  Serial.println("🚨 SYSTEM IN EMERGENCY STATE - Manual reset required");
-  
-  // Get emergency reason if provided
-  String reason = payload["reason"] | "User initiated emergency stop";
-  Serial.printf("🔍 Emergency reason: %s\n", reason.c_str());
-  
-  // Acknowledge immediately
-  acknowledgeCommand(commandId, "emergency_stop_executed");
-}
-
-void processEmergencyReset(String commandId, JsonObject payload) {
-  Serial.printf("🔄 EMERGENCY RESET COMMAND RECEIVED: %s\n", commandId.c_str());
-  
-  if (!emergencyStopActive) {
-    Serial.println("ℹ️ No emergency stop active - reset not needed");
-    acknowledgeCommand(commandId, "no_emergency_active");
-    return;
-  }
-  
-  // Clear emergency stop state
-  emergencyStopActive = false;
-  systemInPanic = false;
-  Serial.println("✅ EMERGENCY STOP CLEARED");
-  
-  // Re-enable auto mode (user can disable manually if needed)
-  isAutoMode = true;
-  digitalWrite(AUTO_MODE_LED_PIN, HIGH);
-  Serial.println("🔄 AUTO MODE RE-ENABLED");
-  
-  // Sound confirmation beep (2 short beeps)
-  for (int i = 0; i < 2; i++) {
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(200);
-    digitalWrite(BUZZER_PIN, LOW);
-    delay(200);
-  }
-  
-  Serial.println("✅ SYSTEM RESET - Normal operation resumed");
-  
-  // Acknowledge reset completion
-  acknowledgeCommand(commandId, "emergency_reset_completed");
+  // Send command to Sump ESP32 immediately
+  sendMotorCommandToSump(lastMotorCommand);
 }
 
 void acknowledgeCommand(String commandId, String status) {
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/commands/" + commandId + "/ack";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/commands/" + commandId + "/ack";
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(128);
@@ -782,6 +761,94 @@ void acknowledgeCommand(String commandId, String status) {
       Serial.printf("✅ Command %s acknowledged\n", commandId.c_str());
     } else {
       Serial.printf("❌ Failed to acknowledge command %s: HTTP %d\n", commandId.c_str(), httpCode);
+    }
+    
+    http.end();
+  }
+}
+
+// ========== SUMP ESP32 COMMUNICATION ==========
+void checkSumpESP32Availability() {
+  if (!wifiConnected) {
+    sumpESP32Available = false;
+    return;
+  }
+  
+  HTTPClient http;
+  String url = String("http://") + SUMP_ESP32_IP + ":" + String(SUMP_ESP32_PORT) + "/status";
+  
+  if (http.begin(url)) {
+    http.setTimeout(5000); // 5 second timeout
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+      if (!sumpESP32Available) {
+        Serial.println("✅ Sump ESP32 connection established");
+      }
+      sumpESP32Available = true;
+    } else {
+      if (sumpESP32Available) {
+        Serial.printf("❌ Sump ESP32 unavailable: %d\n", httpCode);
+      }
+      sumpESP32Available = false;
+    }
+    
+    http.end();
+  } else {
+    sumpESP32Available = false;
+  }
+}
+
+void controlSumpMotor() {
+  bool shouldStart = false;
+  bool shouldStop = false;
+  
+  // Determine motor control logic
+  if (currentLevel <= MOTOR_START_LEVEL && !lastMotorCommand) {
+    shouldStart = true;
+  } else if (currentLevel >= MOTOR_STOP_LEVEL && lastMotorCommand) {
+    shouldStop = true;
+  }
+  
+  // Send command if state changed
+  if (shouldStart || shouldStop) {
+    lastMotorCommand = shouldStart;
+    sendMotorCommandToSump(lastMotorCommand);
+    
+    String action = lastMotorCommand ? "START" : "STOP";
+    String reason = shouldStart ? "Top tank low" : "Top tank full";
+    Serial.printf("⚙️ Motor command: %s (%s)\n", action.c_str(), reason.c_str());
+  }
+}
+
+void sendMotorCommandToSump(bool start) {
+  if (!sumpESP32Available || !wifiConnected) {
+    Serial.println("⚠️ Motor command skipped - Sump ESP32 not available");
+    return;
+  }
+  
+  HTTPClient http;
+  String url = String("http://") + SUMP_ESP32_IP + ":" + String(SUMP_ESP32_PORT) + "/motor";
+  
+  if (http.begin(url)) {
+    DynamicJsonDocument doc(128);
+    doc["command"] = start ? "start" : "stop";
+    doc["device_id"] = DEVICE_ID;
+    doc["level_percentage"] = currentLevel;
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(10000);
+    
+    int httpCode = http.POST(payload);
+    
+    if (httpCode == 200) {
+      Serial.printf("✅ Motor command sent to Sump: %s\n", start ? "START" : "STOP");
+    } else {
+      Serial.printf("❌ Failed to send motor command: HTTP %d\n", httpCode);
     }
     
     http.end();
@@ -816,14 +883,7 @@ void checkPanicConditions(unsigned long currentMillis) {
     sensorErrorCount = 0;
   }
   
-  // Check 3: Motor stuck on for too long
-  if (motorRunning && motorStartTime > 0 && 
-      currentMillis - motorStartTime > MOTOR_MAX_RUNTIME_MS) {
-    shouldPanic = true;
-    panicReason = "Motor running too long - possible mechanical failure";
-  }
-  
-  // Check 4: Low memory condition
+  // Check 3: Low memory condition
   if (ESP.getFreeHeap() < 10000) { // Less than 10KB free
     shouldPanic = true;
     panicReason = "Critical memory shortage";
@@ -834,11 +894,7 @@ void checkPanicConditions(unsigned long currentMillis) {
     Serial.println("\n🚨 PANIC MODE ACTIVATED 🚨");
     Serial.printf("Reason: %s\n", panicReason.c_str());
     
-    // Immediate safety actions
-    digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
-    motorRunning = false;
-    
-    // Alert via buzzer (if not hardware failure)
+    // Alert via buzzer
     for (int i = 0; i < 5; i++) {
       digitalWrite(BUZZER_PIN, HIGH);
       delay(200);
@@ -846,8 +902,9 @@ void checkPanicConditions(unsigned long currentMillis) {
       delay(200);
     }
     
-    // Try to report panic to backend
+    // Try to report panic to backend and cloud
     reportPanicToBackend(panicReason);
+    reportPanicToCloud(panicReason);
     
     delay(5000); // Allow time for panic report
     
@@ -857,10 +914,10 @@ void checkPanicConditions(unsigned long currentMillis) {
 }
 
 void reportPanicToBackend(String reason) {
-  if (!wifiConnected) return;
+  if (!wifiConnected || !backendAvailable) return;
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/panic";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/panic";
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(256);
@@ -869,7 +926,7 @@ void reportPanicToBackend(String reason) {
     doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     doc["free_heap"] = ESP.getFreeHeap();
     doc["level_percentage"] = currentLevel;
-    doc["motor_running"] = motorRunning;
+    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
     
     String payload;
     serializeJson(doc, payload);
@@ -879,7 +936,40 @@ void reportPanicToBackend(String reason) {
     http.addHeader("x-api-key", DEVICE_API_KEY);
     
     int httpCode = http.POST(payload);
-    Serial.printf("📤 Panic report sent: %d\n", httpCode);
+    Serial.printf("📤 Panic report sent to backend: %d\n", httpCode);
+    
+    http.end();
+  }
+}
+
+void reportPanicToCloud(String reason) {
+  if (!wifiConnected || !cloudAvailable) return;
+  
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/device_alerts";
+  
+  if (http.begin(url)) {
+    DynamicJsonDocument doc(512);
+    doc["device_id"] = DEVICE_ID;
+    doc["alert_type"] = "panic_mode";
+    doc["severity"] = "critical";
+    doc["message"] = reason;
+    doc["level_percentage"] = currentLevel;
+    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
+    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["metadata"] = JsonObject();
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.addHeader("Prefer", "return=minimal");
+    
+    int httpCode = http.POST(payload);
+    Serial.printf("☁️ Panic report sent to cloud: %d\n", httpCode);
     
     http.end();
   }
@@ -897,10 +987,6 @@ void checkDailyRestart() {
     restartScheduled = true;
     
     Serial.println("\n🌙 SCHEDULED DAILY RESTART (2:00 AM)");
-    
-    // Safety: Turn off motor
-    digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
-    motorRunning = false;
     
     // Report scheduled restart
     if (backendAvailable && wifiConnected) {
@@ -920,7 +1006,7 @@ void checkDailyRestart() {
 
 void reportScheduledRestart() {
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/scheduled-restart";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/scheduled-restart";
   
   if (http.begin(url)) {
     DynamicJsonDocument doc(128);
@@ -941,13 +1027,15 @@ void reportScheduledRestart() {
   }
 }
 
-// ========== WIFI MANAGEMENT (NO RESTART ON DISCONNECTION) ==========
+// ========== WIFI MANAGEMENT ==========
 void maintainWiFiConnection() {
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiConnected) {
       Serial.println("📡 WiFi disconnected");
       wifiConnected = false;
       backendAvailable = false;
+      cloudAvailable = false;
+      sumpESP32Available = false;
     }
     
     wifiRetryCount++;
@@ -969,8 +1057,10 @@ void maintainWiFiConnection() {
         wifiConnected = true;
         wifiRetryCount = 0;
         Serial.println("✅ WiFi reconnected!");
-        // Check backend availability after WiFi reconnection
+        // Check all services availability after WiFi reconnection
         checkBackendAvailability();
+        checkCloudAvailability();
+        checkSumpESP32Availability();
       }
     } else {
       Serial.println("❌ WiFi reconnection failed - operating in local mode only");
@@ -984,13 +1074,19 @@ void maintainWiFiConnection() {
 
 // ========== BACKEND COMMUNICATION ==========
 bool checkBackendAvailability() {
+  // If backend is disabled, always return false
+  if (!BACKEND_ENABLED) {
+    backendAvailable = false;
+    return false;
+  }
+  
   if (!wifiConnected) {
     backendAvailable = false;
     return false;
   }
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/ping";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/ping";
   
   if (http.begin(url)) {
     http.setTimeout(5000); // 5 second timeout
@@ -1025,21 +1121,19 @@ void sendSensorDataToBackend() {
   if (!backendAvailable || !wifiConnected) return;
   
   HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + BACKEND_PORT + "/api/esp32/sensor-data";
+  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/sensor-data";
   
   if (http.begin(url)) {
     String timestamp = String(millis());
     
     DynamicJsonDocument doc(400);
     doc["esp32_id"] = DEVICE_ID;
-    doc["tank_type"] = "sump_tank";
+    doc["tank_type"] = "top_tank";
     doc["level_percentage"] = currentLevel;
     doc["level_liters"] = currentVolume;
-    doc["motor_running"] = motorRunning;
-    doc["auto_mode"] = isAutoMode;
-    doc["float_switch"] = floatSwitchState;
-    doc["manual_motor_switch"] = !digitalRead(MANUAL_MOTOR_SWITCH_PIN); // Invert because LOW = pressed
-    doc["mode_switch"] = !digitalRead(MODE_SWITCH_PIN); // Invert because LOW = pressed
+    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
+    doc["low_level_alert"] = currentLevel <= LOW_LEVEL_THRESHOLD;
+    doc["critical_level_alert"] = currentLevel <= CRITICAL_LEVEL_THRESHOLD;
     doc["sensor_health"] = "online";
     doc["connection_state"] = "connected";
     doc["signal_strength"] = WiFi.RSSI();
@@ -1066,167 +1160,49 @@ void sendSensorDataToBackend() {
   }
 }
 
-// ========== MOTOR CONTROL WITH SAFETY ==========
-void autoMotorControl() {
-  static unsigned long lastLogicCheck = 0;
-  if (millis() - lastLogicCheck < 5000) return; // Check every 5 seconds
-  lastLogicCheck = millis();
-  
-  // If emergency stop is active, prevent any motor control
-  if (emergencyStopActive) {
-    return;
-  }
-  
-  bool shouldStartMotor = false;
-  bool shouldStopMotor = false;
-  String reason = "";
-  
-  // Check stop conditions first (safety priority)
-  if (motorRunning) {
-    if (!floatSwitchState) {
-      shouldStopMotor = true;
-      reason = "Float switch safety stop";
-    } else if (currentLevel <= AUTO_STOP_LEVEL) {
-      shouldStopMotor = true;
-      reason = "Auto stop level reached";
-    } else if (currentLevel >= SUMP_HIGH_LEVEL) {
-      shouldStopMotor = true;
-      reason = "Sump tank full";
-    }
-  }
-  
-  // Check start conditions - simplified logic without topTankNeedsWater dependency
-  if (!motorRunning && !shouldStopMotor) {
-    if (floatSwitchState && currentLevel >= AUTO_START_LEVEL && currentLevel < SUMP_HIGH_LEVEL) {
-      shouldStartMotor = true;
-      reason = "Auto start conditions met";
-    }
-  }
-  
-  // Execute motor control
-  if (shouldStopMotor) {
-    digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
-    if (motorRunning) {
-      motorRunning = false;
-      lastMotorStop = millis();
-      Serial.printf("🔌 Motor OFF: %s\n", reason.c_str());
-    }
-  } else if (shouldStartMotor) {
-    // Check cooldown period
-    if (lastMotorStop == 0 || millis() - lastMotorStop >= MOTOR_COOLDOWN_MS) {
-      digitalWrite(MOTOR_RELAY_PIN, RELAY_ON);
-      motorRunning = true;
-      motorStartTime = millis();
-      Serial.printf("🔌 Motor ON: %s\n", reason.c_str());
-    } else {
-      Serial.println("⏳ Motor in cooldown period");
-    }
-  }
-}
-
-void checkMotorSafety() {
-  if (motorRunning && motorStartTime > 0) {
-    unsigned long runtime = millis() - motorStartTime;
-    
-    if (runtime > MOTOR_MAX_RUNTIME_MS) {
-      digitalWrite(MOTOR_RELAY_PIN, RELAY_OFF);
-      motorRunning = false;
-      Serial.println("🚨 EMERGENCY MOTOR STOP - Max runtime exceeded");
-      
-      // This could trigger panic mode if it happens repeatedly
-      static int motorTimeoutCount = 0;
-      motorTimeoutCount++;
-      if (motorTimeoutCount >= 3) {
-        systemInPanic = true;
-      }
-    }
-  }
-}
-
 // ========== UI CONTROLS ==========
-void handleSwitches() {
-  static unsigned long lastSwitchCheck = 0;
-  if (millis() - lastSwitchCheck < 200) return; // Debounce
-  lastSwitchCheck = millis();
-  
-  // Mode switch
-  bool modeSwitchState = digitalRead(MODE_SWITCH_PIN);
-  if (modeSwitchState != lastModeSwitchState && modeSwitchState == LOW) {
-    isAutoMode = !isAutoMode;
-    digitalWrite(AUTO_MODE_LED_PIN, isAutoMode ? HIGH : LOW);
-    Serial.printf("🔄 Mode: %s\n", isAutoMode ? "AUTO" : "MANUAL");
-    
-    // If switching to auto mode and motor is running manually, keep it running
-    // If switching to manual mode, allow manual control
-  }
-  lastModeSwitchState = modeSwitchState;
-  
-  // Manual motor switch (works in both AUTO and MANUAL modes as override)
-  if (!systemInPanic && !emergencyStopActive) {
-    bool motorSwitchState = digitalRead(MANUAL_MOTOR_SWITCH_PIN);
-    if (motorSwitchState != lastMotorSwitchState && motorSwitchState == LOW) {
-      if (floatSwitchState) { // Safety check
-        motorRunning = !motorRunning;
-        digitalWrite(MOTOR_RELAY_PIN, motorRunning ? RELAY_ON : RELAY_OFF);
-        if (motorRunning) {
-          motorStartTime = millis();
-          Serial.printf("🔧 Manual override: Motor ON\n");
-        } else {
-          Serial.printf("🔧 Manual override: Motor OFF\n");
-        }
-        
-        // Report switch action to backend immediately
-        if (wifiConnected && backendAvailable) {
-          reportSystemStatus();
-        }
-      } else {
-        Serial.println("⚠️ Manual motor blocked - Float switch safety");
-      }
+void updateLED() {
+  // Status LED patterns
+  if (systemInPanic) {
+    // Fast blink for panic
+    if (millis() - lastLedBlink >= 200) {
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+      lastLedBlink = millis();
     }
-    lastMotorSwitchState = motorSwitchState;
-  }
-}
-
-void updateLEDs() {
-  // Auto mode LED
-  digitalWrite(AUTO_MODE_LED_PIN, isAutoMode ? HIGH : LOW);
-  
-  // Low level LED (solid when low)
-  digitalWrite(SUMP_LOW_LED_PIN, currentLevel <= SUMP_LOW_LEVEL ? HIGH : LOW);
-  
-  // Full level LED (blink at high, solid at critical)
-  if (currentLevel >= SUMP_CRITICAL_LEVEL) {
-    digitalWrite(SUMP_FULL_LED_PIN, HIGH);
-  } else if (currentLevel >= SUMP_HIGH_LEVEL) {
-    // Blink LED
-    if (millis() - lastLedBlink >= 500) {
-      digitalWrite(SUMP_FULL_LED_PIN, !digitalRead(SUMP_FULL_LED_PIN));
+  } else if (currentLevel <= CRITICAL_LEVEL_THRESHOLD) {
+    // Solid on for critical level
+    digitalWrite(LED_PIN, HIGH);
+  } else if (currentLevel <= LOW_LEVEL_THRESHOLD) {
+    // Slow blink for low level
+    if (millis() - lastLedBlink >= 1000) {
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
       lastLedBlink = millis();
     }
   } else {
-    digitalWrite(SUMP_FULL_LED_PIN, LOW);
+    // Normal: LED off
+    digitalWrite(LED_PIN, LOW);
   }
 }
 
 void handleBuzzer() {
-  if (currentLevel >= SUMP_CRITICAL_LEVEL && buzzerRingCount < 3) {
+  if (currentLevel <= CRITICAL_LEVEL_THRESHOLD && buzzerRingCount < 5) {
     unsigned long currentMillis = millis();
     
-    if (currentMillis - lastBuzzerRing >= 400) {
+    if (currentMillis - lastBuzzerRing >= 500) {
       digitalWrite(BUZZER_PIN, HIGH);
       delay(200);
       digitalWrite(BUZZER_PIN, LOW);
       buzzerRingCount++;
       lastBuzzerRing = currentMillis;
     }
-  } else if (currentLevel < SUMP_CRITICAL_LEVEL) {
+  } else if (currentLevel > CRITICAL_LEVEL_THRESHOLD) {
     buzzerRingCount = 0;
   }
   
   // Panic mode buzzer pattern
   if (systemInPanic) {
     static unsigned long lastPanicBuzz = 0;
-    if (millis() - lastPanicBuzz >= 1000) {
+    if (millis() - lastPanicBuzz >= 800) {
       digitalWrite(BUZZER_PIN, HIGH);
       delay(100);
       digitalWrite(BUZZER_PIN, LOW);
@@ -1237,18 +1213,15 @@ void handleBuzzer() {
 
 // ========== STATUS REPORTING ==========
 void reportSystemStatus() {
-  Serial.println("\n========== ENHANCED SYSTEM STATUS ==========");
+  Serial.println("\n========== ENHANCED + CLOUD TOP TANK STATUS ==========");
   Serial.printf("Device: %s (Uptime: %lu min)\n", DEVICE_ID, (millis() - systemStartTime) / 60000);
-  Serial.printf("Tank: Rectangle %.1f×%.1f×%.1fcm (%.1fL capacity)\n", 
-                TANK_LENGTH_CM, TANK_WIDTH_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
+  Serial.printf("Tank: Cylinder Ø%.1fcm × %.1fcm (%.1fL capacity)\n", 
+                TANK_DIAMETER_CM, TANK_HEIGHT_CM, TANK_CAPACITY_LITERS);
   Serial.printf("Water Level: %.1f%% (%.1fL)\n", currentLevel, currentVolume);
-  Serial.printf("Float Switch: %s\n", floatSwitchState ? "Water Present" : "No Water");
-  Serial.printf("Motor: %s", motorRunning ? "RUNNING" : "STOPPED");
-  if (motorRunning && motorStartTime > 0) {
-    Serial.printf(" (Runtime: %lu min)", (millis() - motorStartTime) / 60000);
-  }
-  Serial.println();
-  Serial.printf("Mode: %s\n", isAutoMode ? "AUTO" : "MANUAL");
+  Serial.printf("Motor Command: %s\n", lastMotorCommand ? "START" : "STOP");
+  Serial.printf("Alerts: Low=%s, Critical=%s\n", 
+                currentLevel <= LOW_LEVEL_THRESHOLD ? "YES" : "NO",
+                currentLevel <= CRITICAL_LEVEL_THRESHOLD ? "YES" : "NO");
   Serial.printf("System Status: %s\n", systemInPanic ? "PANIC MODE" : "NORMAL");
   Serial.printf("WiFi: %s", wifiConnected ? "Connected" : "Disconnected");
   if (wifiConnected) {
@@ -1260,14 +1233,18 @@ void reportSystemStatus() {
     Serial.printf(" (Last response: %lu sec ago)", (millis() - lastBackendResponse) / 1000);
   }
   Serial.println();
-  Serial.printf("Top Tank Command: %s\n", topTankNeedsWater ? "NEEDS WATER" : "NO REQUEST");
+  Serial.printf("Cloud: %s", cloudAvailable ? "Available" : "Unavailable");
+  if (cloudAvailable && lastCloudResponse > 0) {
+    Serial.printf(" (Last response: %lu sec ago)", (millis() - lastCloudResponse) / 1000);
+  }
+  Serial.println();
+  Serial.printf("Sump ESP32: %s\n", sumpESP32Available ? "Available" : "Unavailable");
   Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
-  Serial.printf("Local Server: http://%s/\n", WiFi.localIP().toString().c_str());
   
   struct tm timeinfo;
   if (getLocalTime(&timeinfo)) {
     Serial.printf("Current Time: %02d:%02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   }
   
-  Serial.println("==========================================\n");
+  Serial.println("======================================================\n");
 }

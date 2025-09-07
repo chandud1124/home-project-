@@ -319,13 +319,22 @@ const EnhancedIndex = () => {
   const maxReconnectAttempts = 5;
 
   const connectWebSocket = () => {
+    // Skip WebSocket connection in cloud-only mode
+    if (import.meta.env.VITE_CLOUD_ONLY_MODE === 'true' || import.meta.env.VITE_WEBSOCKET_URL === 'disabled') {
+      console.log('🌐 WebSocket disabled - using cloud-only mode with Supabase real-time');
+      setIsConnected(true); // Consider cloud connection as "connected"
+      setReconnectAttempts(0);
+      return;
+    }
+
     if (reconnectAttempts >= maxReconnectAttempts) {
       console.log('Max WebSocket reconnection attempts reached');
       return;
     }
 
     try {
-      const websocket = new WebSocket('ws://localhost:8083');
+      const websocketUrl = import.meta.env.VITE_WEBSOCKET_URL || 'ws://localhost:8083';
+      const websocket = new WebSocket(websocketUrl);
       
       websocket.onopen = () => {
         console.log('WebSocket connected');

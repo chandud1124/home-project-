@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "aqua-guard-sense"
-  }
+    "default": "aqua-guard-sense",
+    "new": "aqua-guard-sense"
+  },
+  "targets": {},
+  "etags": {}
 }

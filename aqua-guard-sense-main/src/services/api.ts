@@ -22,6 +22,9 @@ const WS_URL = import.meta.env.VITE_WEBSOCKET_URL || import.meta.env.VITE_WS_URL
 // Cloud-only mode configuration
 const CLOUD_ONLY_MODE = import.meta.env.VITE_CLOUD_ONLY_MODE === 'true' || WS_URL === 'disabled'
 
+// Export cloud-only mode flag
+export const isCloudOnlyMode = () => CLOUD_ONLY_MODE
+
 // Flag to use mock API when backend is not available
 const USE_MOCK_API = false // Using real ESP32 data
 
@@ -757,56 +760,100 @@ class ApiService {
     }
     
     try {
-      console.log(`🎛️ Sending motor ${action} command to backend...`);
-      
-      // Also make HTTP request to backend
-      const response = await fetch(`${BACKEND_URL}/api/motor/control`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ 
-          action,
-          manual: true 
+      if (CLOUD_ONLY_MODE) {
+        // Use Supabase device_commands table for cloud-only mode
+        console.log(`🎛️ Sending motor ${action} command via Supabase device_commands...`);
+        
+        const command = {
+          id: `cmd_${Date.now()}`,
+          device_id: 'SUMP_TANK', // ESP32 device ID
+          type: action === 'start' ? 'motor_start' : 'motor_stop',
+          payload: { manual: true, action },
+          acknowledged: false,
+          created_at: new Date().toISOString()
+        };
+        
+        const { data, error } = await supabase
+          .from('device_commands')
+          .insert([command])
+          .select()
+          .single();
+          
+        if (error) {
+          throw new Error(`Supabase error: ${error.message}`);
+        }
+        
+        console.log('📡 Device command inserted:', data);
+        
+        // Create a mock event for UI feedback
+        const mockEvent: MotorEvent = {
+          id: data.id || `motor_${Date.now()}`,
+          event_type: action === 'start' ? 'start' : 'stop',
+          duration: 0,
+          esp32_id: data.device_id || 'SUMP_TANK',
+          motor_running: action === 'start',
+          power_detected: action === 'start',
+          current_draw: action === 'start' ? 5.2 : 0,
+          timestamp: data.created_at || new Date().toISOString()
+        }
+
+        console.log('✅ Motor control command sent via cloud:', mockEvent);
+        return {
+          success: true,
+          event: mockEvent
+        }
+      } else {
+        // Local backend mode (for development)
+        console.log(`🎛️ Sending motor ${action} command to backend...`);
+        
+        const response = await fetch(`${BACKEND_URL}/api/motor/control`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ 
+            action,
+            manual: true 
+          })
         })
-      })
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Motor control HTTP error:', response.status, errorText);
-        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`)
-      }
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Motor control HTTP error:', response.status, errorText);
+          throw new Error(`HTTP error! status: ${response.status} - ${errorText}`)
+        }
 
-      const data = await response.json()
-      console.log('🎛️ Backend response:', data);
+        const data = await response.json()
+        console.log('🎛️ Backend response:', data);
 
-      if (!data.success) {
-        throw new Error(data.error || 'Motor control command failed')
-      }
+        if (!data.success) {
+          throw new Error(data.error || 'Motor control command failed')
+        }
 
-      // Send WebSocket message for motor control (after successful HTTP request)
-      this.sendWebSocketMessage({
-        type: 'motor_control',
-        state: action === 'start',
-        manual: true
-      })
+        // Send WebSocket message for motor control (after successful HTTP request)
+        this.sendWebSocketMessage({
+          type: 'motor_control',
+          state: action === 'start',
+          manual: true
+        })
 
-      // Create a mock event since backend doesn't return event data yet
-      const mockEvent: MotorEvent = {
-        id: data.command?.id || `motor_${Date.now()}`,
-        event_type: action === 'start' ? 'start' : 'stop',
-        duration: 0,
-        esp32_id: data.command?.device_id || 'ESP32_SUMP_002',
-        motor_running: action === 'start',
-        power_detected: action === 'start',
-        current_draw: action === 'start' ? 5.2 : 0,
-        timestamp: data.command?.created_at || new Date().toISOString()
-      }
+        // Create a mock event since backend doesn't return event data yet
+        const mockEvent: MotorEvent = {
+          id: data.command?.id || `motor_${Date.now()}`,
+          event_type: action === 'start' ? 'start' : 'stop',
+          duration: 0,
+          esp32_id: data.command?.device_id || 'ESP32_SUMP_002',
+          motor_running: action === 'start',
+          power_detected: action === 'start',
+          current_draw: action === 'start' ? 5.2 : 0,
+          timestamp: data.command?.created_at || new Date().toISOString()
+        }
 
-      console.log('✅ Motor control command sent successfully:', mockEvent);
-      return {
-        success: true,
-        event: mockEvent
+        console.log('✅ Motor control command sent successfully:', mockEvent);
+        return {
+          success: true,
+          event: mockEvent
+        }
       }
     } catch (error) {
       console.error('❌ Error controlling motor:', error)

@@ -42,7 +42,7 @@
 #define BACKEND_ENABLED false  // DISABLED - Using cloud-only mode
 
 // ========== SUMP ESP32 CONFIGURATION ==========
-#define SUMP_ESP32_IP "192.168.0.107"  // IP of the Sump Tank ESP32
+#define SUMP_ESP32_IP "192.168.0.184"  // IP of the Sump Tank ESP32
 #define SUMP_ESP32_PORT 80
 
 // ========== CLOUD CONFIGURATION (SUPABASE) ==========
@@ -110,7 +110,7 @@ unsigned long lastBackendCheck = 0;
 unsigned long lastCloudSync = 0;
 unsigned long lastStatusReport = 0;
 unsigned long lastCommandCheck = 0;
-unsigned long lastMotorCommand = 0;
+unsigned long lastMotorCommandTime = 0;  // Renamed to avoid conflict with bool lastMotorCommand
 unsigned long lastWifiConnect = 0;
 unsigned long lastBackendResponse = 0;
 unsigned long lastCloudResponse = 0;
@@ -127,6 +127,9 @@ int wifiRetryCount = 0;
 int backendRetryCount = 0;
 int cloudRetryCount = 0;
 int heartbeatMissCount = 0;
+
+// Function prototypes
+void sendCloudHeartbeat();
 
 // ========== SETUP ==========
 void setup() {
@@ -215,9 +218,8 @@ void loop() {
     lastCloudSync = currentMillis;
   }
   
-  // Send heartbeat to backend (only if backend enabled)
-  if (BACKEND_ENABLED && wifiConnected && backendAvailable && 
-      currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+  // Send heartbeat (cloud-only mode)
+  if (wifiConnected && currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
     sendHeartbeat();
     lastHeartbeat = currentMillis;
   }
@@ -228,19 +230,17 @@ void loop() {
     if (BACKEND_ENABLED && backendAvailable) {
       checkPendingCommands();
     }
-    // TEMPORARILY DISABLED: Cloud commands causing HTTP 400 errors
-    /*
+    // Check for cloud commands every 10 seconds  
     if (cloudAvailable) {
       checkPendingCloudCommands();
     }
-    */
     lastCommandCheck = currentMillis;
   }
   
   // Send motor control commands to Sump ESP32
-  if (currentMillis - lastMotorCommand >= MOTOR_COMMAND_INTERVAL) {
+  if (currentMillis - lastMotorCommandTime >= MOTOR_COMMAND_INTERVAL) {
     controlSumpMotor();
-    lastMotorCommand = currentMillis;
+    lastMotorCommandTime = currentMillis;
   }
   
   // Update LEDs and buzzer
@@ -444,8 +444,19 @@ void checkPendingCloudCommands() {
           
           Serial.printf("☁️ Processing cloud command: %s (%s)\n", commandType.c_str(), commandId.c_str());
           
-          if (commandType == "motor_control") {
+          if (commandType == "motor_start" || commandType == "motor_stop") {
+            // Create payload with action from command type
+            JsonObject motorPayload = payload;
+            if (commandType == "motor_start") {
+              motorPayload["action"] = "start";
+            } else {
+              motorPayload["action"] = "stop";
+            }
+            processMotorControlCommand(commandId, motorPayload);
+          } else if (commandType == "motor_control") {
             processMotorControlCommand(commandId, payload);
+          } else {
+            Serial.printf("⚠️ Unknown command type: %s\n", commandType.c_str());
           }
           
           // Acknowledge the cloud command
@@ -648,66 +659,88 @@ void readSensors() {
 
 // ========== HEARTBEAT SYSTEM ==========
 void sendHeartbeat() {
-  if (!wifiConnected || !backendAvailable) {
-    Serial.println("⚠️ Heartbeat skipped - WiFi or backend not available");
+  // Skip heartbeat if WiFi not connected
+  if (!wifiConnected) {
+    Serial.println("⚠️ Heartbeat skipped - WiFi not available");
     return;
   }
   
-  HTTPClient http;
-  String url = String("http://") + BACKEND_HOST + ":" + String(BACKEND_PORT) + "/api/esp32/heartbeat";
+  // For cloud-only mode, send heartbeat to Supabase
+  if (cloudAvailable) {
+    sendCloudHeartbeat();
+  } else {
+    Serial.println("⚠️ Heartbeat skipped - Cloud not available");
+  }
+}
+
+void sendCloudHeartbeat() {
+  NetworkClientSecure client;
+  client.setInsecure(); // Skip certificate validation for now
   
-  Serial.printf("📤 Sending heartbeat to: %s\n", url.c_str());
+  String url = "/rest/v1/device_heartbeats";
+  Serial.printf("📤 Sending cloud heartbeat to: %s%s\n", SUPABASE_URL, url.c_str());
   
-  if (http.begin(url)) {
-    String timestamp = String(millis());
-    
-    DynamicJsonDocument doc(256);
+  if (client.connect(SUPABASE_HOST, 443)) {
+    DynamicJsonDocument doc(512);
     doc["device_id"] = DEVICE_ID;
+    doc["heartbeat_type"] = "ping";
     doc["status"] = "alive";
     doc["level_percentage"] = currentLevel;
-    doc["motor_command"] = lastMotorCommand ? "start" : "stop";
+    doc["motor_running"] = lastMotorCommand;
     doc["connection_state"] = "connected";
-    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     doc["free_heap"] = ESP.getFreeHeap();
     doc["wifi_rssi"] = WiFi.RSSI();
-    doc["timestamp"] = timestamp;
+    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     
     String payload;
     serializeJson(doc, payload);
     
-    Serial.printf("📤 Heartbeat payload: %s\n", payload.c_str());
+    Serial.printf("📤 Cloud heartbeat payload: %s\n", payload.c_str());
     
-    // Generate HMAC signature
-    String signature = generateHMACSignature(payload, timestamp);
+    // Build HTTP request
+    String request = "POST " + url + " HTTP/1.1\r\n";
+    request += "Host: " + String(SUPABASE_HOST) + "\r\n";
+    request += "Content-Type: application/json\r\n";
+    request += "apikey: " + String(SUPABASE_ANON_KEY) + "\r\n";
+    request += "Authorization: Bearer " + String(SUPABASE_ANON_KEY) + "\r\n";
+    request += "Prefer: return=minimal\r\n";
+    request += "Content-Length: " + String(payload.length()) + "\r\n";
+    request += "Connection: close\r\n\r\n";
+    request += payload;
     
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("x-device-id", DEVICE_ID);
-    http.addHeader("x-api-key", DEVICE_API_KEY);
-    http.addHeader("x-signature", signature);
-    http.addHeader("x-timestamp", timestamp);
-    http.setTimeout(10000); // 10 second timeout
+    client.print(request);
     
-    int httpCode = http.POST(payload);
+    // Read response
+    unsigned long timeout = millis();
+    while (client.available() == 0) {
+      if (millis() - timeout > 10000) {
+        Serial.println("❌ Cloud heartbeat timeout");
+        client.stop();
+        return;
+      }
+    }
     
-    if (httpCode == 200) {
-      lastBackendResponse = millis();
+    // Parse response
+    String response = "";
+    while (client.available()) {
+      response += client.readString();
+    }
+    client.stop();
+    
+    if (response.indexOf("HTTP/1.1 201") > -1) {
+      lastCloudResponse = millis();
       heartbeatMissCount = 0;
-      backendRetryCount = 0;
-      Serial.println("💓 Heartbeat sent successfully");
+      Serial.println("💓 Cloud heartbeat sent successfully");
     } else {
       heartbeatMissCount++;
-      backendRetryCount++;
-      String errorResponse = http.getString();
-      Serial.printf("❌ Heartbeat failed: HTTP %d (Miss count: %d)\n", httpCode, heartbeatMissCount);
-      Serial.printf("❌ Error response: %s\n", errorResponse.c_str());
-      
-      // If backend has database issues, don't mark it completely unavailable
-      // Just continue trying with increased interval
-      if (httpCode == 500 && errorResponse.indexOf("db.collection") > -1) {
-        Serial.println("🔧 Backend database issue detected - continuing with reduced frequency");
-        backendRetryCount = MAX_BACKEND_RETRIES - 1; // Keep trying but less frequently
-      } else if (backendRetryCount >= MAX_BACKEND_RETRIES) {
-        backendAvailable = false;
+      Serial.printf("❌ Cloud heartbeat failed (Miss count: %d)\n", heartbeatMissCount);
+      Serial.printf("❌ Response: %s\n", response.substring(0, 200).c_str());
+    }
+  } else {
+    heartbeatMissCount++;
+    Serial.printf("❌ Failed to connect to Supabase for heartbeat (Miss count: %d)\n", heartbeatMissCount);
+  }
+}
         Serial.println("🔌 Backend marked as unavailable");
       }
     }

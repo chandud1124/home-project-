@@ -19,7 +19,7 @@ import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
-import { apiService, type ConsumptionData } from "@/services/api";
+import { apiService, isCloudOnlyMode, type ConsumptionData } from "@/services/api";
 import { aiService } from "@/services/aiService";
 import { 
   Droplets, 
@@ -105,6 +105,44 @@ const Index = () => {
 
   // WebSocket connection state
   const [wsConnected, setWsConnected] = useState<boolean>(false);
+  
+  // State for latest tank data to determine connection status
+  const [latestTankData, setLatestTankData] = useState<{
+    topTank: any | null;
+    sumpTank: any | null;
+    lastUpdate: Date;
+  }>({
+    topTank: null,
+    sumpTank: null,
+    lastUpdate: new Date()
+  });
+
+  // Computed connection status for cloud-only mode
+  const getRealtimeConnectionStatus = (): boolean => {
+    if (!isCloudOnlyMode()) {
+      console.log('🔌 Using WebSocket connection status:', wsConnected);
+      return wsConnected; // Use WebSocket status for traditional mode
+    }
+    
+    // For cloud-only mode: use data freshness from tanks
+    const now = new Date();
+    const hasRecentTopData = latestTankData.topTank?.timestamp && 
+      (now.getTime() - new Date(latestTankData.topTank.timestamp).getTime()) < 300000; // 5 minutes
+    const hasRecentSumpData = latestTankData.sumpTank?.timestamp && 
+      (now.getTime() - new Date(latestTankData.sumpTank.timestamp).getTime()) < 300000; // 5 minutes
+    
+    const isConnected = hasRecentTopData || hasRecentSumpData;
+    console.log('☁️ Cloud-only mode - Connection status:', {
+      isConnected,
+      hasRecentTopData,
+      hasRecentSumpData,
+      topTimestamp: latestTankData.topTank?.timestamp,
+      sumpTimestamp: latestTankData.sumpTank?.timestamp,
+      now: now.toISOString()
+    });
+    
+    return isConnected; // Connected if either tank has recent data
+  };
 
   // Debug: Log AI insights changes
   useEffect(() => {
@@ -161,13 +199,12 @@ const Index = () => {
           console.log('📊 Calculated total water level:', totalLiters, 'L');
           setTotalWaterLevel(totalLiters);
           
-          // Force set test values to debug UI updates
-          console.log('🧪 Setting test values for debugging');
-          setWaterLevelChange(5.2);
-          setMotorStatus('Test Status');
-          setMotorLastRun('Test Runtime');
-          setDailyUsage(125.5);
-          setEfficiency(87.3);
+          // Get real data from API instead of test values
+          console.log('📊 Using real cloud data - no test values');
+          // setWaterLevelChange will be calculated from real historical data
+          // setMotorStatus will be updated from real motor events
+          // setDailyUsage will come from real consumption data
+          // setEfficiency will be calculated from real system performance
           
           // Update the individual tank percentages from the retrieved data
           const sumpTank = tanks.find(tank => tank.tank_type === 'sump_tank' || tank.tank_type === 'sump');
@@ -192,7 +229,7 @@ const Index = () => {
           setTopLevelPercentage(cachedReadings.top_tank.level_percentage);
           
           // Estimate total liters from percentages
-          const estimatedSumpLiters = 13225 * (cachedReadings.sump_tank.level_percentage / 100);
+          const estimatedSumpLiters = 1322.5 * (cachedReadings.sump_tank.level_percentage / 100);
           const estimatedTopLiters = 1000 * (cachedReadings.top_tank.level_percentage / 100);
           const totalLiters = estimatedSumpLiters + estimatedTopLiters;
           setTotalWaterLevel(totalLiters);
@@ -358,7 +395,7 @@ const Index = () => {
           insights.push(...(schedules as unknown as AIInsight[]));
           
           // Add tank empty prediction
-          const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 13225); // Sump tank capacity: 13,225L
+          const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 1322.5); // Sump tank capacity: 1,322.5L
           console.log('🤖 AI: Tank prediction:', tankPrediction);
           if (tankPrediction.hoursRemaining > 0) {
             insights.push({
@@ -450,28 +487,8 @@ const Index = () => {
         setDailyConsumptionData([]); // No consumption data in fallback
         setMonthlyConsumptionData([]); // No consumption data in fallback
         
-        // Generate fallback AI insights
-        const fallbackInsights: AIInsight[] = [
-          {
-            id: 'fallback-prediction',
-            type: 'prediction',
-            title: 'Tank Empty Prediction',
-            message: 'Based on current usage patterns, tank will be empty in approximately 4.2 hours (85% confidence)',
-            confidence: 0.85,
-            priority: 'medium',
-            timestamp: new Date()
-          },
-          {
-            id: 'fallback-anomaly',
-            type: 'anomaly',
-            title: 'Usage Pattern Analysis',
-            message: 'AI is learning from your water usage patterns. Real insights will be available once data is connected.',
-            confidence: 0.6,
-            priority: 'low',
-            timestamp: new Date()
-          }
-        ];
-        setAiInsights(fallbackInsights);
+        // Don't set fallback AI insights - only show real data
+        console.log('💬 No fallback AI insights set - waiting for real cloud data');
       } finally {
         setIsLoading(false);
       }
@@ -504,7 +521,7 @@ const Index = () => {
       newInsights.push(...(aiService.generateSmartSchedule(new Date().getHours()) as unknown as AIInsight[]));
       
       // Add tank empty prediction
-      const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 13225);
+      const tankPrediction = aiService.predictTankEmpty(totalWaterLevel, 1322.5);
       if (tankPrediction.hoursRemaining > 0) {
         newInsights.push({
           id: 'tank-empty-prediction',
@@ -668,6 +685,13 @@ const Index = () => {
       const sumpTank = tanks.find(tank => tank.tank_type === 'sump_tank' || tank.tank_type === 'sump');
       const topTank = tanks.find(tank => tank.tank_type === 'top_tank' || tank.tank_type === 'top');
       
+      // Update latest tank data state for connection status
+      setLatestTankData({
+        topTank,
+        sumpTank,
+        lastUpdate: new Date()
+      });
+      
       // For cloud-only mode: determine connection state based on data freshness
       const determineConnectionState = (
         tankData: any
@@ -812,8 +836,8 @@ const Index = () => {
         
         // Helper to update the total water level based on both tank percentages
         function updateTotalWaterLevel() {
-          // Calculate volume in liters based on percentages and tank capacities
-          const sumpLiters = 13225 * sumpLevelPercentage / 100;
+          // Calculate volume in liters based on percentages and correct tank capacities
+          const sumpLiters = 1322.5 * sumpLevelPercentage / 100;  // Fixed: correct sump tank capacity
           const topLiters = 1000 * topLevelPercentage / 100;
           const total = sumpLiters + topLiters;
           
@@ -1450,19 +1474,19 @@ const Index = () => {
         <Badge 
                 variant="outline" 
                 className={`px-2 sm:px-3 py-1 text-xs sm:text-sm ${
-                  wsConnected 
+                  getRealtimeConnectionStatus() 
                     ? 'bg-success/10 border-success/20 text-success' 
                     : 'bg-warning/10 border-warning/20 text-warning'
                 }`}
               >
                 <div className={`w-2 h-2 rounded-full mr-1 sm:mr-2 animate-pulse ${
-                  wsConnected ? 'bg-success' : 'bg-warning'
+                  getRealtimeConnectionStatus() ? 'bg-success' : 'bg-warning'
                 }`} />
                 <span className="hidden sm:inline">
-          Realtime: {wsConnected ? 'Connected' : 'Disconnected'}
+          Realtime: {getRealtimeConnectionStatus() ? 'Connected' : 'Disconnected'}
                 </span>
                 <span className="sm:hidden">
-          RT: {wsConnected ? 'On' : 'Off'}
+          RT: {getRealtimeConnectionStatus() ? 'On' : 'Off'}
                 </span>
               </Badge>
               <Badge 
@@ -1723,7 +1747,7 @@ const Index = () => {
               <EnhancedTankMonitor
                 title="Sump Tank"
                 currentLevel={sumpLevelPercentage}
-                capacity={13225}
+                capacity={1322.5}
                 status={sumpLevelPercentage < 30 ? "low" : sumpLevelPercentage > 90 ? "full" : "normal"}
                 sensorHealth={esp32SumpStatus.connected ? "online" : "offline"}
                 esp32Status={esp32SumpStatus}

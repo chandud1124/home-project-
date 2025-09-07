@@ -498,10 +498,9 @@ void syncWithCloud() {
     doc["auto_mode_enabled"] = isAutoMode; // Match schema field name
     doc["float_switch"] = floatSwitchState;
     doc["sensor_health"] = "good"; // Default sensor health
-    doc["wifi_rssi"] = WiFi.RSSI();
     doc["battery_voltage"] = 12.0; // Assume 12V power supply
     doc["signal_strength"] = WiFi.RSSI();
-    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
+    // Removed wifi_rssi and uptime_seconds - not in table schema
     
     String payload;
     serializeJson(doc, payload);

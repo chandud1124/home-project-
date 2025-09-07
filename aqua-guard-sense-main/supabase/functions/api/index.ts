@@ -234,10 +234,62 @@ async function handleAlerts(supabaseClient, req) {
   })
 }
 
+// Helper function to determine ESP32 status consistently
+async function getESP32Status(supabaseClient) {
+  let esp32_top_status = 'offline';
+  let esp32_sump_status = 'offline';
+
+  try {
+    // Check recent device heartbeats within last 5 minutes
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    
+    const { data: recentHeartbeats, error: heartbeatError } = await supabaseClient
+      .from('device_heartbeats')
+      .select('esp32_id, timestamp')
+      .gte('timestamp', fiveMinutesAgo)
+      .order('timestamp', { ascending: false });
+
+    if (!heartbeatError && recentHeartbeats) {
+      const topHeartbeat = recentHeartbeats.find(h => h.esp32_id === 'TOP_TANK');
+      const sumpHeartbeat = recentHeartbeats.find(h => h.esp32_id === 'SUMP_TANK');
+      
+      if (topHeartbeat) esp32_top_status = 'online';
+      if (sumpHeartbeat) esp32_sump_status = 'online';
+    }
+
+    // Fallback: Check device status table for devices seen within last 10 minutes
+    if (esp32_top_status === 'offline' || esp32_sump_status === 'offline') {
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      
+      const { data: devices, error: deviceError } = await supabaseClient
+        .from('esp32_devices')
+        .select('id, device_type, status, last_seen')
+        .gte('last_seen', tenMinutesAgo)
+        .order('last_seen', { ascending: false });
+
+      if (!deviceError && devices) {
+        const topDevice = devices.find(d => d.device_type === 'top_tank');
+        const sumpDevice = devices.find(d => d.device_type === 'sump_tank');
+        
+        if (esp32_top_status === 'offline' && topDevice) esp32_top_status = 'online';
+        if (esp32_sump_status === 'offline' && sumpDevice) esp32_sump_status = 'online';
+      }
+    }
+  } catch (error) {
+    console.error('Error checking ESP32 status:', error);
+    // Return offline status on error
+  }
+
+  return { esp32_top_status, esp32_sump_status };
+}
+
 // Handle system status
 async function handleSystemStatus(supabaseClient, req) {
   if (req.method === 'GET') {
-    // Get latest system status
+    // Get ESP32 status using consistent logic
+    const { esp32_top_status, esp32_sump_status } = await getESP32Status(supabaseClient);
+    
+    // Get latest system status from database
     const { data, error } = await supabaseClient
       .from('system_status')
       .select('*')
@@ -246,14 +298,21 @@ async function handleSystemStatus(supabaseClient, req) {
 
     if (error) throw error
 
-    const status = data[0] || {
+    const baseStatus = data[0] || {
       wifi_connected: true,
       temperature: 25,
       uptime: '0d 0h 0m',
-      esp32_top_status: 'offline',
-      esp32_sump_status: 'offline',
       battery_level: 100
-    }
+    };
+
+    // Override with real-time ESP32 status
+    const status = {
+      ...baseStatus,
+      esp32_top_status,
+      esp32_sump_status,
+      wifi_connected: esp32_top_status === 'online' || esp32_sump_status === 'online',
+      timestamp: new Date().toISOString()
+    };
 
     return new Response(JSON.stringify(status), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

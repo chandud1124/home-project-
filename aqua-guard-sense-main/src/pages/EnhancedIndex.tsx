@@ -278,37 +278,43 @@ const EnhancedIndex = () => {
 
     fetchDashboardData();
 
-    // Refresh data every 60 seconds (reduced for performance)  
-    const interval = setInterval(fetchDashboardData, 60000);
+    // Refresh data every 10 seconds for more responsive UI
+    const interval = setInterval(fetchDashboardData, 10000);
     return () => clearInterval(interval);
   }, [toast]);
 
-  // API service functions
-  const apiService = {
+  // API service functions - using global apiService with Supabase direct integration
+  const apiServiceLocal = {
     getTanks: async (): Promise<TankReading[]> => {
-      const response = await fetch('http://localhost:3001/api/tanks');
-      if (!response.ok) throw new Error('Failed to fetch tanks');
-      return response.json();
+      // Use the global API service which has Supabase direct integration
+      return await apiService.getTanks();
     },
     getSystemStatus: async (): Promise<SystemStatusType> => {
-      const response = await fetch('http://localhost:3001/api/system/status');
-      if (!response.ok) throw new Error('Failed to fetch system status');
-      return response.json();
+      // Mock system status for cloud-only mode
+      return {
+        wifi_connected: true,
+        temperature: 25.0,
+        uptime: '1h 30m',
+        esp32_top_status: 'online',
+        esp32_sump_status: 'online',
+        battery_level: 95,
+        wifi_strength: -45,
+        timestamp: new Date().toISOString()
+      };
     },
     getAlerts: async (): Promise<ApiSystemAlert[]> => {
-      const response = await fetch('http://localhost:3001/api/alerts');
-      if (!response.ok) throw new Error('Failed to fetch alerts');
-      return response.json();
+      const alerts = await apiService.getAlerts();
+      return alerts.map(alert => ({
+        ...alert,
+        id: parseInt(alert.id) || 1
+      }));
     },
     getConsumptionData: async (): Promise<ConsumptionData[]> => {
-      const response = await fetch('http://localhost:3001/api/consumption');
-      if (!response.ok) throw new Error('Failed to fetch consumption data');
-      return response.json();
+      // Mock consumption data for cloud-only mode
+      return [];
     },
     getMotorEvents: async (): Promise<any[]> => {
-      const response = await fetch('http://localhost:3001/api/motor/events');
-      if (!response.ok) throw new Error('Failed to fetch motor events');
-      return response.json();
+      return await apiService.getMotorEvents();
     }
   };
 

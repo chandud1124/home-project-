@@ -480,11 +480,11 @@ const Index = () => {
     console.log('🚀 Component mounted, starting fetchDashboardData...');
     fetchDashboardData();
 
-    // Refresh data every 60 seconds (reduced from 30s for better performance)
+    // Refresh data every 15 seconds for more responsive UI in cloud-only mode
     const interval = setInterval(() => {
-      console.log('🔄 60-second interval: calling fetchDashboardData...');
+      console.log('🔄 15-second interval: calling fetchDashboardData...');
       fetchDashboardData();
-    }, 60000);
+    }, 15000);
     return () => clearInterval(interval);
   }, []); // Remove toast dependency to ensure it runs on mount
 
@@ -668,54 +668,42 @@ const Index = () => {
       const sumpTank = tanks.find(tank => tank.tank_type === 'sump_tank' || tank.tank_type === 'sump');
       const topTank = tanks.find(tank => tank.tank_type === 'top_tank' || tank.tank_type === 'top');
       
-      // Determine connection state based on multiple factors
+      // For cloud-only mode: determine connection state based on data freshness
       const determineConnectionState = (
-        isOnline: boolean, 
-        tankData: any, 
-        cachedReading: any
+        tankData: any
       ): 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale' => {
-        if (!isOnline) return 'disconnected';
-        
-        if (tankData && tankData.connection_state) {
-          return tankData.connection_state as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
+        if (!tankData || !tankData.timestamp) {
+          return 'disconnected';
         }
         
-        // If we have a timestamp, check data freshness
-        if (tankData && tankData.timestamp) {
-          const now = new Date();
-          const lastUpdate = new Date(tankData.timestamp);
-          const secondsElapsed = (now.getTime() - lastUpdate.getTime()) / 1000;
-          
-          if (secondsElapsed > 300) return 'stale'; // Data older than 5 minutes
-          if (secondsElapsed < 30) return 'connected'; // Fresh data
-          return 'reconnecting'; // Data between 30s and 5min old
-        }
+        // Check data freshness
+        const now = new Date();
+        const lastUpdate = new Date(tankData.timestamp);
+        const secondsElapsed = (now.getTime() - lastUpdate.getTime()) / 1000;
         
-        // Fallback to whatever the system status says
-        return isOnline ? 'connected' : 'disconnected';
+        console.log(`📊 Tank data freshness: ${secondsElapsed}s elapsed`);
+        
+        if (secondsElapsed < 60) return 'connected'; // Fresh data within 1 minute
+        if (secondsElapsed < 300) return 'stale'; // Data between 1-5 minutes old
+        return 'disconnected'; // Data older than 5 minutes
       };
       
+      const topConnected = topTank && topTank.timestamp;
+      const sumpConnected = sumpTank && sumpTank.timestamp;
+      
       setEsp32TopStatus({
-        connected: systemStatus.esp32_top_status === 'online',
-        wifiStrength: systemStatus.wifi_strength || 0,
-        lastSeen: topTank ? new Date(topTank.timestamp) : (systemStatus.esp32_top_status === 'online' ? new Date() : null),
-        connectionState: determineConnectionState(
-          systemStatus.esp32_top_status === 'online',
-          topTank,
-          cachedReadings.top_tank
-        ),
+        connected: !!topConnected,
+        wifiStrength: topTank?.signal_strength || 0,
+        lastSeen: topTank ? new Date(topTank.timestamp) : null,
+        connectionState: determineConnectionState(topTank),
         backendResponsive: true
       });
       
       setEsp32SumpStatus({
-        connected: systemStatus.esp32_sump_status === 'online',
-        wifiStrength: systemStatus.wifi_strength || 0,
-        lastSeen: sumpTank ? new Date(sumpTank.timestamp) : (systemStatus.esp32_sump_status === 'online' ? new Date() : null),
-        connectionState: determineConnectionState(
-          systemStatus.esp32_sump_status === 'online',
-          sumpTank,
-          cachedReadings.sump_tank
-        ),
+        connected: !!sumpConnected,
+        wifiStrength: sumpTank?.signal_strength || 0,
+        lastSeen: sumpTank ? new Date(sumpTank.timestamp) : null,
+        connectionState: determineConnectionState(sumpTank),
         backendResponsive: true
       });
       

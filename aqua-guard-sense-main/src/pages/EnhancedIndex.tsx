@@ -534,9 +534,37 @@ const EnhancedIndex = () => {
     };
   }, []);
 
-  // Fetch initial data from backend
+  // Fetch initial data from backend with polling for tank data
   useEffect(() => {
     if (hasFetchedInitialData || isFetchingData) return;
+
+    const fetchTankData = async () => {
+      try {
+        console.log('🔧 Fetching tank data from API...');
+        
+        const tanks = await apiService.getTanks();
+        console.log('Tank API Results:', tanks);
+
+        if (tanks) {
+          const topTanks = tanks.filter((tank: TankReading) => tank.tank_type === 'top_tank');
+          const latestTopTank = topTanks.sort((a: TankReading, b: TankReading) => 
+            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
+          setTopTank(latestTopTank);
+
+          const sumpTanks = tanks.filter((tank: TankReading) => tank.tank_type === 'sump_tank');
+          const latestSumpTank = sumpTanks.sort((a: TankReading, b: TankReading) => 
+            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
+          setSumpTank(latestSumpTank);
+          
+          console.log('✅ Updated tank data:', { 
+            topTank: latestTopTank ? `${latestTopTank.level_percentage}% (${latestTopTank.sensor_health})` : 'null',
+            sumpTank: latestSumpTank ? `${latestSumpTank.level_percentage}% (${latestSumpTank.sensor_health})` : 'null'
+          });
+        }
+      } catch (error) {
+        console.error('❌ Failed to fetch tank data:', error);
+      }
+    };
 
     const fetchInitialData = async () => {
       try {
@@ -550,29 +578,16 @@ const EnhancedIndex = () => {
         const timeoutId = setTimeout(() => controller.abort(), 10000);
         
         try {
-          const [tanks, statusData, alertsData, consumption] = await Promise.allSettled([
-            apiService.getTanks(),
+          const [statusData, alertsData, consumption] = await Promise.allSettled([
             apiService.getSystemStatus(),
             apiService.getAlerts(),
             apiService.getConsumptionData()
           ]);
           
-          console.log('API Results:', { tanks, statusData, alertsData, consumption });
+          console.log('API Results:', { statusData, alertsData, consumption });
 
           if (statusData.status === 'fulfilled') {
             setSystemStatus(statusData.value);
-          }
-
-          if (tanks.status === 'fulfilled') {
-            const topTanks = tanks.value.filter((tank: TankReading) => tank.tank_type === 'top_tank');
-            const latestTopTank = topTanks.sort((a: TankReading, b: TankReading) => 
-              new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
-            setTopTank(latestTopTank);
-
-            const sumpTanks = tanks.value.filter((tank: TankReading) => tank.tank_type === 'sump_tank');
-            const latestSumpTank = sumpTanks.sort((a: TankReading, b: TankReading) => 
-              new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
-            setSumpTank(latestSumpTank);
           }
 
           if (alertsData.status === 'fulfilled') {
@@ -603,7 +618,20 @@ const EnhancedIndex = () => {
       }
     };
 
+    // Fetch initial data and setup tank data polling
     fetchInitialData();
+    fetchTankData(); // Fetch tank data immediately
+    
+    // Poll tank data every 10 seconds for real-time updates
+    const tankDataInterval = setInterval(() => {
+      console.log('🔄 Polling tank data...');
+      fetchTankData();
+    }, 10000);
+    
+    return () => {
+      console.log('🔄 Cleaning up tank data polling interval');
+      clearInterval(tankDataInterval);
+    };
   }, [hasFetchedInitialData, isFetchingData]);
 
   const handleAIQuery = (query: string) => {

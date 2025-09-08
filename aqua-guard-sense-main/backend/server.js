@@ -266,6 +266,77 @@ let dbConnected = false;
 supabase.from('tank_readings').select('id').limit(1).then(() => {
   dbConnected = true;
   console.log('[startup] Supabase connectivity OK');
+  
+  // Set up real-time subscription to listen for new tank readings from ESP32s
+  console.log('[startup] Setting up Supabase real-time subscription for tank_readings...');
+  
+  const tankReadingsSubscription = supabase
+    .channel('tank_readings_channel')
+    .on('postgres_changes', 
+      { event: 'INSERT', schema: 'public', table: 'tank_readings' }, 
+      (payload) => {
+        console.log('📊 New tank reading from Supabase real-time:', payload.new);
+        
+        // Broadcast the new tank reading to frontend clients
+        broadcast({
+          type: 'tank_reading',
+          data: payload.new
+        });
+        
+        // Also broadcast system status update based on the new reading
+        const reading = payload.new;
+        broadcast({
+          type: 'system_status',
+          data: {
+            wifi_connected: true, // If we got data, ESP32 is connected
+            battery_level: reading.battery_voltage ? (reading.battery_voltage / 12.6 * 100) : 85,
+            temperature: 25,
+            esp32_top_status: reading.tank_type === 'top_tank' ? 'online' : 'unknown',
+            esp32_sump_status: reading.tank_type === 'sump_tank' ? 'online' : 'unknown', 
+            wifi_strength: reading.signal_strength || -50,
+            float_switch: reading.float_switch,
+            motor_running: reading.motor_running,
+            manual_override: reading.manual_override,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+    )
+    .subscribe((status) => {
+      console.log('[startup] Tank readings subscription status:', status);
+    });
+
+  // Set up real-time subscription for device heartbeats  
+  const heartbeatsSubscription = supabase
+    .channel('device_heartbeats_channel')
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'device_heartbeats' },
+      (payload) => {
+        console.log('💓 New device heartbeat from Supabase real-time:', payload.new);
+        
+        // Extract connection info from heartbeat
+        const heartbeat = payload.new;
+        const isOnline = heartbeat.status === 'online';
+        
+        // Broadcast system status update based on heartbeat
+        broadcast({
+          type: 'system_status', 
+          data: {
+            wifi_connected: isOnline,
+            battery_level: 85,
+            temperature: 25,
+            esp32_top_status: heartbeat.device_id === 'TOP_TANK' ? (isOnline ? 'online' : 'offline') : 'unknown',
+            esp32_sump_status: heartbeat.device_id === 'SUMP_TANK' ? (isOnline ? 'online' : 'offline') : 'unknown',
+            wifi_strength: heartbeat.metadata?.signal_strength || -50,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+    )
+    .subscribe((status) => {
+      console.log('[startup] Device heartbeats subscription status:', status);
+    });
+    
 }).catch(err => {
   console.error('[startup] Supabase connectivity FAILED:', err.message);
 });

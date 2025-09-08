@@ -910,6 +910,31 @@ const Index = () => {
     const tankReadingHandler = apiService.onWebSocketMessage('tank_reading', (data) => {
       console.log('📊 Tank reading received in Index.tsx:', data);
       updateTankDataThrottled(data);
+
+      // Update ESP32 connection status based on tank reading data
+      // Update ESP32 Top status - support both old and new device IDs  
+      if (data.esp32_id === 'TOP_TANK' || data.esp32_id === 'ESP32_TOP_001' || data.tank_type === 'top_tank') {
+        setEsp32TopStatus(prev => ({
+          ...prev,
+          connected: true, // If we receive data, ESP32 is connected
+          wifiStrength: data.signal_strength || prev.wifiStrength,
+          lastSeen: new Date(),
+          connectionState: 'connected',
+          backendResponsive: true
+        }));
+      }
+
+      // Update ESP32 Sump status - support both old and new device IDs
+      if (data.esp32_id === 'SUMP_TANK' || data.esp32_id === 'ESP32_SUMP_002' || data.tank_type === 'sump_tank') {
+        setEsp32SumpStatus(prev => ({
+          ...prev,
+          connected: true, // If we receive data, ESP32 is connected
+          wifiStrength: data.signal_strength || prev.wifiStrength,
+          lastSeen: new Date(),
+          connectionState: 'connected',
+          backendResponsive: true
+        }));
+      }
     });
 
     // Single consolidated handler for motor_status messages

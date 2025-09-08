@@ -47,11 +47,11 @@ typedef WiFiClientSecure NetworkClientSecure;
 #define BACKEND_HOST "192.168.0.108"  // Your backend server IP (actual computer IP)
 #define BACKEND_PORT 3001
 #define BACKEND_USE_HTTPS false
-#define BACKEND_ENABLED false  // DISABLED - Using cloud-only mode
+#define BACKEND_ENABLED true  // ENABLED - Send data to both backend and cloud
 
 // ========== CLOUD CONFIGURATION (SUPABASE) ==========
 #define CLOUD_ENABLED true
-#define SENSOR_CONNECTED false         // Set to true when sensor is physically connected
+#define SENSOR_CONNECTED true          // Set to true when sensor is physically connected
 #define SUPABASE_URL "https://dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_HOST "dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
@@ -573,10 +573,8 @@ void syncWithCloud() {
     doc["sensor_health"] = "good"; // Device is online and sending data
     doc["battery_voltage"] = 12.0; // Assume 12V power supply
     doc["signal_strength"] = WiFi.RSSI();
-    // Add device connection status to ensure frontend shows as online
-    doc["device_status"] = "online"; // Explicitly mark as online
-    doc["connection_state"] = "connected"; // Additional status indicator
-    // Removed wifi_rssi and uptime_seconds - not in table schema
+    doc["manual_override"] = false; // Default value
+    // Removed device_status and connection_state - not in table schema
     
     String payload;
     serializeJson(doc, payload);

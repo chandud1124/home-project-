@@ -95,9 +95,9 @@ typedef WiFiClientSecure NetworkClientSecure;
 
 // ========== TIMING CONFIGURATION ==========
 #define SENSOR_READ_INTERVAL 2000
-#define HEARTBEAT_INTERVAL 30000      // Send heartbeat every 30 seconds
+#define HEARTBEAT_INTERVAL 15000      // Send heartbeat every 15 seconds for better online visibility
 #define BACKEND_CHECK_INTERVAL 60000  // Check backend every 60 seconds
-#define CLOUD_SYNC_INTERVAL 60000     // Sync with cloud every 60 seconds
+#define CLOUD_SYNC_INTERVAL 30000     // Sync with cloud every 30 seconds for better connectivity visibility
 #define STATUS_REPORT_INTERVAL 30000  // Report status every 30 seconds
 #define COMMAND_CHECK_INTERVAL 10000  // Check for commands every 10 seconds
 #define WIFI_RECONNECT_DELAY 10000    // Wait 10s before WiFi reconnect
@@ -549,8 +549,8 @@ void checkCloudAvailability() {
 }
 
 void syncWithCloud() {
-  if (!cloudAvailable || !wifiConnected) {
-    Serial.println("☁️ Cloud sync skipped - not available or WiFi down");
+  if (!wifiConnected) {
+    Serial.println("☁️ Cloud sync skipped - WiFi not available");
     return;
   }
   
@@ -569,9 +569,12 @@ void syncWithCloud() {
     doc["motor_running"] = motorRunning;
     doc["auto_mode_enabled"] = isAutoMode; // Match schema field name
     doc["float_switch"] = floatSwitchState;
-    doc["sensor_health"] = "good"; // Default sensor health
+    doc["sensor_health"] = "good"; // Device is online and sending data
     doc["battery_voltage"] = 12.0; // Assume 12V power supply
     doc["signal_strength"] = WiFi.RSSI();
+    // Add device connection status to ensure frontend shows as online
+    doc["device_status"] = "online"; // Explicitly mark as online
+    doc["connection_state"] = "connected"; // Additional status indicator
     // Removed wifi_rssi and uptime_seconds - not in table schema
     
     String payload;
@@ -588,8 +591,9 @@ void syncWithCloud() {
     int httpCode = http.POST(payload);
     
     if (httpCode == 201 || httpCode == 200) {
-      Serial.println("✅ Data synced to cloud successfully");
+      Serial.println("✅ Data synced to cloud successfully - Device marked ONLINE");
       lastCloudResponse = millis();
+      cloudAvailable = true; // Mark cloud as available since sync succeeded
     } else {
       Serial.printf("❌ Cloud sync failed: HTTP %d\n", httpCode);
       String errorResponse = http.getString();
@@ -895,12 +899,9 @@ void sendHeartbeat() {
     return;
   }
   
-  // For cloud-only mode, send heartbeat to Supabase
-  if (cloudAvailable) {
-    sendCloudHeartbeat();
-  } else {
-    Serial.println("⚠️ Heartbeat skipped - Cloud not available");
-  }
+  // Always try to send heartbeat regardless of cloudAvailable status
+  // This ensures frontend shows device as online even if cloud checks fail
+  sendCloudHeartbeat();
 }
 
 void sendCloudHeartbeat() {
@@ -914,7 +915,8 @@ void sendCloudHeartbeat() {
     DynamicJsonDocument doc(512);
     doc["device_id"] = DEVICE_ID;
     doc["heartbeat_type"] = "ping";
-    doc["status"] = "alive";
+    doc["status"] = "online"; // Changed from "alive" to "online"
+    doc["device_status"] = "connected"; // Additional status field
     doc["level_percentage"] = currentLevel;
     doc["motor_running"] = motorRunning;
     doc["auto_mode"] = isAutoMode;

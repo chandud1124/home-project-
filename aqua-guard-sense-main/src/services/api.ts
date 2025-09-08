@@ -666,7 +666,7 @@ class ApiService {
         motor_running: reading.motor_running,
         manual_override: reading.manual_override,
         auto_mode_enabled: reading.auto_mode_enabled,
-        connection_state: (reading.sensor_health === 'online' ? 'connected' : 'disconnected') as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale',
+        connection_state: (reading.sensor_health === 'good' || reading.sensor_health === 'online' ? 'connected' : 'disconnected') as 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale',
         timestamp: reading.timestamp
       }));
       

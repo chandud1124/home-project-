@@ -51,6 +51,7 @@ typedef WiFiClientSecure NetworkClientSecure;
 
 // ========== CLOUD CONFIGURATION (SUPABASE) ==========
 #define CLOUD_ENABLED true
+#define SENSOR_CONNECTED false         // Set to true when sensor is physically connected
 #define SUPABASE_URL "https://dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_HOST "dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
@@ -677,9 +678,13 @@ void readSensors() {
   } else {
     invalidReadingCount++;
     if (duration == 0) {
-      Serial.println("⚠️ Ultrasonic sensor - No echo received (check wiring)");
+      if (SENSOR_CONNECTED) {
+        Serial.println("⚠️ Ultrasonic sensor - No echo received (check wiring)");
+      }
     } else {
-      Serial.printf("⚠️ Ultrasonic sensor reading timeout: %ld μs\n", duration);
+      if (SENSOR_CONNECTED) {
+        Serial.printf("⚠️ Ultrasonic sensor reading timeout: %ld μs\n", duration);
+      }
     }
   }
   
@@ -690,7 +695,13 @@ void readSensors() {
   }
   
   // Enhanced logging with error count
-  if (invalidReadingCount > 0) {
+  if (!SENSOR_CONNECTED) {
+    // When sensor not connected, just show connectivity status
+    Serial.printf("📊 Top Tank Connectivity Test | WiFi: %s | Cloud: %s | Heartbeat: %s\n", 
+                  wifiConnected ? "Connected" : "Disconnected",
+                  cloudAvailable ? "Available" : "Unavailable",
+                  (millis() - lastCloudResponse < 60000) ? "OK" : "Failed");
+  } else if (invalidReadingCount > 0) {
     Serial.printf("📊 Top Tank: %.1f%% (%.1fL) | Errors: %d\n", 
                   currentLevel, currentVolume, invalidReadingCount);
   } else {
@@ -734,14 +745,17 @@ void sendCloudHeartbeat() {
     DynamicJsonDocument doc(512);
     doc["device_id"] = DEVICE_ID;
     doc["heartbeat_type"] = "ping";
-    doc["status"] = "online"; // Changed from "alive" to "online"
-    doc["device_status"] = "connected"; // Additional status field
-    doc["level_percentage"] = currentLevel;
-    doc["motor_running"] = lastMotorCommand;
-    doc["connection_state"] = "connected";
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["wifi_rssi"] = WiFi.RSSI();
-    doc["uptime_seconds"] = (millis() - systemStartTime) / 1000;
+    
+    // Put all device data in metadata field as JSONB
+    JsonObject metadata = doc.createNestedObject("metadata");
+    metadata["status"] = "online";
+    metadata["device_status"] = "connected";
+    metadata["level_percentage"] = currentLevel;
+    metadata["motor_running"] = lastMotorCommand;
+    metadata["connection_state"] = "connected";
+    metadata["free_heap"] = ESP.getFreeHeap();
+    metadata["wifi_rssi"] = WiFi.RSSI();
+    metadata["uptime_seconds"] = (millis() - systemStartTime) / 1000;
     
     String payload;
     serializeJson(doc, payload);

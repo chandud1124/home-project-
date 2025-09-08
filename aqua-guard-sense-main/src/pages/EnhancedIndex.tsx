@@ -84,6 +84,7 @@ interface TankReading {
   sensor_health?: string;
   esp32_id?: string;
   battery_voltage?: number;
+  connection_state?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
 }
 
 interface ApiSystemAlert {
@@ -557,8 +558,22 @@ const EnhancedIndex = () => {
           setSumpTank(latestSumpTank);
           
           console.log('✅ Updated tank data:', { 
-            topTank: latestTopTank ? `${latestTopTank.level_percentage}% (${latestTopTank.sensor_health})` : 'null',
-            sumpTank: latestSumpTank ? `${latestSumpTank.level_percentage}% (${latestSumpTank.sensor_health})` : 'null'
+            topTank: latestTopTank ? {
+              level_percentage: latestTopTank.level_percentage,
+              sensor_health: latestTopTank.sensor_health,
+              connection_state: latestTopTank.connection_state,
+              signal_strength: latestTopTank.signal_strength,
+              timestamp: latestTopTank.timestamp,
+              connectionStatus: getConnectionStatus(latestTopTank)
+            } : 'null',
+            sumpTank: latestSumpTank ? {
+              level_percentage: latestSumpTank.level_percentage,
+              sensor_health: latestSumpTank.sensor_health,
+              connection_state: latestSumpTank.connection_state,
+              signal_strength: latestSumpTank.signal_strength,
+              timestamp: latestSumpTank.timestamp,
+              connectionStatus: getConnectionStatus(latestSumpTank)
+            } : 'null'
           });
         }
       } catch (error) {
@@ -690,13 +705,25 @@ const EnhancedIndex = () => {
     });
   };
 
-  // Helper function to determine connection status based on data freshness
+  // Helper function to determine connection status based on API data and freshness
   const getConnectionStatus = (tankData: TankReading | null): {
     connected: boolean;
     connectionState: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
   } => {
     if (!tankData) return { connected: false, connectionState: 'disconnected' };
     
+    // Use API-provided connection state if available
+    if (tankData.connection_state) {
+      const isConnected = tankData.connection_state === 'connected' || 
+                         tankData.connection_state === 'stable' ||
+                         tankData.connection_state === 'reconnecting';
+      return { 
+        connected: isConnected, 
+        connectionState: tankData.connection_state 
+      };
+    }
+    
+    // Fallback to data freshness logic
     const dataAge = new Date().getTime() - new Date(tankData.timestamp).getTime();
     const thirtySeconds = 30 * 1000;
     const twoMinutes = 2 * 60 * 1000;

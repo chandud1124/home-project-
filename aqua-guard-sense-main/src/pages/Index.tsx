@@ -6,6 +6,7 @@ import { ConsumptionChart } from "@/components/ConsumptionChart";
 import { SystemAlerts } from "@/components/SystemAlerts";
 import { SystemStatus } from "@/components/SystemStatus";
 import { AIInsightsPanel } from "@/components/AIInsightsPanel";
+import { MLInsights } from "@/components/MLInsights";
 import { PinModal } from "@/components/PinModal";
 import { PinSettings } from "@/components/PinSettings";
 import { ESP32Config } from "@/components/ESP32Config";
@@ -2054,6 +2055,17 @@ const Index = () => {
                 onQuerySubmit={handleAIQuery}
                 queryResponse={queryResponse}
                 className="bg-card/60 backdrop-blur-sm border-border/50"
+                tankData={{
+                  sumpLevel: sumpLevelPercentage,
+                  topLevel: topLevelPercentage,
+                  totalCapacity: totalWaterLevel,
+                  dailyUsage: dailyUsage
+                }}
+                motorData={{
+                  status: motorStatus,
+                  runtime: motorRuntime,
+                  currentDraw: motorCurrentDraw
+                }}
               />
             </Card>
           </div>
@@ -2103,6 +2115,52 @@ const Index = () => {
                 className="bg-card/60 backdrop-blur-sm border-border/50"
               />
             </Card>
+          </div>
+          
+          {/* ML Insights Section */}
+          <div className="mt-8">
+            <MLInsights 
+              tankData={[
+                ...(latestTankData.topTank ? [{
+                  timestamp: latestTankData.topTank.timestamp || new Date().toISOString(),
+                  level_percentage: latestTankData.topTank.level_percentage || 0,
+                  motor_running: latestTankData.topTank.motor_running || false,
+                  wifi_rssi: latestTankData.topTank.signal_strength || -50,
+                  free_heap: latestTankData.topTank.free_heap || 50000,
+                  error_count: latestTankData.topTank.error_count || 0,
+                  uptime_seconds: latestTankData.topTank.uptime_seconds || 0
+                }] : []),
+                ...(latestTankData.sumpTank ? [{
+                  timestamp: latestTankData.sumpTank.timestamp || new Date().toISOString(),
+                  level_percentage: latestTankData.sumpTank.level_percentage || 0,
+                  motor_running: latestTankData.sumpTank.motor_running || sumpMotorRunning,
+                  wifi_rssi: latestTankData.sumpTank.signal_strength || -50,
+                  free_heap: latestTankData.sumpTank.free_heap || 50000,
+                  error_count: latestTankData.sumpTank.error_count || 0,
+                  uptime_seconds: latestTankData.sumpTank.uptime_seconds || 0
+                }] : [])
+              ]}
+              motorHistory={[
+                // Motor history data will be populated from actual motor events
+                {
+                  timestamp: new Date().toISOString(),
+                  runtime_minutes: motorRuntime,
+                  start_count: motorStartCount,
+                  efficiency: efficiency / 100
+                }
+              ]}
+              onInsightAction={(actionType, data) => {
+                console.log('ML Insight Action:', actionType, data);
+                if (actionType === 'emergency_action') {
+                  // Handle emergency actions from ML insights
+                  toast({
+                    title: "Emergency Action Required",
+                    description: "ML system detected critical anomaly. Please review system immediately.",
+                    variant: "destructive"
+                  });
+                }
+              }}
+            />
           </div>
         </section>
       </main>

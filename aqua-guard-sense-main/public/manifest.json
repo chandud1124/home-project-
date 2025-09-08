@@ -1,0 +1,119 @@
+{
+  "name": "AquaGuard Sense - Smart Water Management",
+  "short_name": "AquaGuard",
+  "description": "Intelligent water tank monitoring and management system with AI-powered insights",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0369a1",
+  "background_color": "#ffffff",
+  "categories": ["utilities", "productivity", "lifestyle"],
+  "lang": "en-US",
+  "dir": "ltr",
+  "scope": "/",
+  "id": "aquaguard-sense-pwa",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "1024x1024",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "AquaGuard Dashboard - Desktop View"
+    },
+    {
+      "src": "screenshot-narrow.png", 
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "AquaGuard Dashboard - Mobile View"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Tank Status",
+      "short_name": "Tanks",
+      "description": "View current water tank levels",
+      "url": "/#tanks",
+      "icons": [{ "src": "favicon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Motor Control",
+      "short_name": "Motor",
+      "description": "Control water pump motor",
+      "url": "/#motor",
+      "icons": [{ "src": "favicon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "AI Insights",
+      "short_name": "Insights",
+      "description": "View ML-powered insights and predictions",
+      "url": "/#insights",
+      "icons": [{ "src": "favicon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Alerts",
+      "short_name": "Alerts",
+      "description": "View system alerts and notifications",
+      "url": "/#alerts",
+      "icons": [{ "src": "favicon.svg", "sizes": "192x192" }]
+    }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "protocol_handlers": [
+    {
+      "protocol": "aquaguard",
+      "url": "/?action=%s"
+    }
+  ],
+  "prefer_related_applications": false,
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "display_override": ["window-controls-overlay", "minimal-ui", "standalone", "browser"],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "file_handlers": [
+    {
+      "action": "/open-data",
+      "accept": {
+        "application/json": [".json"],
+        "text/csv": [".csv"]
+      }
+    }
+  ]
+}

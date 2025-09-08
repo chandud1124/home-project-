@@ -1,0 +1,10 @@
+# Firebase configuration files
+# Add your Firebase configuration files here:
+# - android/app/google-services.json
+# - ios/Runner/GoogleService-Info.plist
+
+# Environment configuration
+# Create a .env file with these variables:
+SUPABASE_URL=your_supabase_url_here
+SUPABASE_ANON_KEY=your_supabase_anon_key_here
+FIREBASE_API_KEY=your_firebase_api_key_here

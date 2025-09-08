@@ -1,0 +1,94 @@
+name: aquaguard_flutter
+description: AquaGuard Sense - Smart Water Management Flutter App
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.1.0 <4.0.0'
+  flutter: ">=3.13.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Backend Integration
+  supabase_flutter: ^2.5.6        # Supabase client for Flutter
+  firebase_core: ^2.24.2          # Firebase initialization
+  firebase_messaging: ^14.7.10    # Push notifications
+  firebase_analytics: ^10.7.4     # Analytics (optional)
+  
+  # Real-time & API
+  web_socket_channel: ^2.4.0      # WebSocket connections
+  http: ^1.1.0                    # HTTP API calls
+  dio: ^5.3.4                     # Advanced HTTP client
+  
+  # Machine Learning
+  # Note: TensorFlow Lite dependencies removed for build compatibility
+  # Can be re-added when needed with updated versions
+  
+  # Local Storage & Caching
+  sqflite: ^2.3.0                 # Local SQLite database
+  shared_preferences: ^2.2.2      # User preferences
+  hive: ^2.2.3                    # Fast local storage
+  hive_flutter: ^1.1.0            # Hive Flutter integration
+  
+  # State Management
+  provider: ^6.1.1                # State management
+  riverpod: ^2.4.9                # Advanced state management (alternative)
+  
+  # Offline & Sync
+  connectivity_plus: ^5.0.2       # Network connectivity
+  internet_connection_checker: ^1.0.0+1  # Internet status
+  
+  # Push Notifications
+  flutter_local_notifications: ^16.3.2  # Local notifications
+  
+  # Charts & Visualization
+  fl_chart: ^0.66.2               # Beautiful charts
+  
+  # Device Features
+  device_info_plus: ^9.1.1       # Device information
+  permission_handler: ^11.2.0    # App permissions
+  
+  # Background Tasks
+  workmanager: ^0.5.2            # Background sync
+  
+  # Utilities
+  intl: ^0.19.0                   # Internationalization and date formatting
+  uuid: ^4.2.1                    # UUID generation
+  crypto: ^3.0.3                  # Encryption utilities
+  
+  # JSON & Serialization
+  json_annotation: ^4.8.1        # JSON annotations
+  
+  # UI Components
+  cupertino_icons: ^1.0.2
+  
+  # Logging
+  logger: ^2.0.2+1                # Logging utility
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  build_runner: ^2.4.7
+  json_serializable: ^6.7.1
+  
+  # Testing
+  mockito: ^5.4.4
+  test: ^1.24.9
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/ml_models/
+    
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700

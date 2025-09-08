@@ -8,6 +8,7 @@ import { EnhancedTankMonitor } from "./EnhancedTankMonitor";
 import { AutoMotorControl } from "./AutoMotorControl";
 import { SystemAlerts } from "./SystemAlerts";
 import { AIInsightsPanel } from "./AIInsightsPanel";
+import { NotificationSettings } from "./NotificationSettings";
 import { SystemStatus } from "./SystemStatus";
 import { ConsumptionChart } from "./ConsumptionChart";
 import { useSwipeGestures } from "@/hooks/useSwipeGestures";
@@ -299,6 +300,17 @@ const MobileDashboard: React.FC<MobileDashboardProps> = ({
             onQuerySubmit={onAIQuerySubmit}
             queryResponse={queryResponse}
             className="bg-card/60 backdrop-blur-sm border-border/50"
+            tankData={{
+              sumpLevel: sumpLevelPercentage,
+              topLevel: topLevelPercentage,
+              totalCapacity: totalWaterLevel,
+              dailyUsage: dailyUsage
+            }}
+            motorData={{
+              status: motorStatus,
+              runtime: motorRuntime,
+              currentDraw: motorCurrentDraw
+            }}
           />
         </TabsContent>
 
@@ -330,6 +342,9 @@ const MobileDashboard: React.FC<MobileDashboardProps> = ({
           />
           
           <SystemAlerts alerts={alerts as any} />
+          
+          {/* Mobile Notification Settings */}
+          <NotificationSettings />
         </TabsContent>
       </Tabs>
     </div>

@@ -12,14 +12,14 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
-  "test:backend": "node --test backend/tests/*.test.js",
+    "test:backend": "node --test backend/tests/*.test.js",
     "deploy": "./deploy.sh",
     "deploy:frontend": "npm run build && firebase deploy --only hosting",
     "deploy:backend": "supabase functions deploy",
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
-  "supabase:status": "supabase status",
-  "check:env": "node scripts/check-env.js"
+    "supabase:status": "supabase status",
+    "check:env": "node scripts/check-env.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -52,6 +52,7 @@
     "@radix-ui/react-tooltip": "^1.2.7",
     "@supabase/supabase-js": "^2.56.1",
     "@tanstack/react-query": "^5.83.0",
+    "@tensorflow/tfjs": "^4.22.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

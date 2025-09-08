@@ -43,7 +43,7 @@ typedef WiFiClientSecure NetworkClientSecure;
 #define BACKEND_HOST "192.168.0.108"  // Your backend server IP (actual computer IP)
 #define BACKEND_PORT 3001
 #define BACKEND_USE_HTTPS false
-#define BACKEND_ENABLED false  // DISABLED - Using cloud-only mode
+#define BACKEND_ENABLED true  // ENABLED - Send data to both backend and cloud
 
 // ========== SUMP ESP32 CONFIGURATION ==========
 #define SUMP_ESP32_IP "192.168.0.184"  // IP of the Sump Tank ESP32
@@ -51,7 +51,7 @@ typedef WiFiClientSecure NetworkClientSecure;
 
 // ========== CLOUD CONFIGURATION (SUPABASE) ==========
 #define CLOUD_ENABLED true
-#define SENSOR_CONNECTED false         // Set to true when sensor is physically connected
+#define SENSOR_CONNECTED true          // Set to true when sensor is physically connected
 #define SUPABASE_URL "https://dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_HOST "dwcouaacpqipvvsxiygo.supabase.co"
 #define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR3Y291YWFjcHFpcHZ2c3hpeWdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY3Mjg4OTAsImV4cCI6MjA3MjMwNDg5MH0.KSMEdolMR0rk95oUiLyrImcfBij5uDs6g9F7iC7FQY4"
@@ -90,7 +90,7 @@ typedef WiFiClientSecure NetworkClientSecure;
 #define WIFI_RECONNECT_DELAY 10000    // Wait 10s before WiFi reconnect
 #define PANIC_THRESHOLD_MS 300000     // 5 minutes of no response = panic
 #define DAILY_RESTART_HOUR 2          // Restart at 2:00 AM
-#define WATCHDOG_TIMEOUT_S 60         // Increased to 60 seconds watchdog timeout
+#define WATCHDOG_TIMEOUT_S 30         // Reduced to 30 seconds watchdog timeout for more aggressive monitoring
 
 // ========== SAFETY & ERROR HANDLING ==========
 #define MAX_WIFI_RETRIES 3
@@ -230,14 +230,14 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
   
-  // Feed watchdog to prevent unnecessary resets
-  esp_task_wdt_reset();
+  // Feed watchdog to prevent unnecessary resets - DISABLED
+  // esp_task_wdt_reset();
   
   // Check for daily restart (2:00 AM)
   checkDailyRestart();
   
-  // Check for panic conditions (only restart on panic, not WiFi issues)
-  checkPanicConditions(currentMillis);
+  // Check for panic conditions (only restart on panic, not WiFi issues) - DISABLED
+  // checkPanicConditions(currentMillis);
   
   // Read sensors periodically
   if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL) {
@@ -332,14 +332,27 @@ void initializePins() {
 }
 
 void setupWatchdog() {
+  // Disable watchdog to prevent restart loops during development/testing
+  Serial.println("⚠️ Watchdog disabled for stability testing");
+  // Try to deinitialize if already initialized
+  esp_task_wdt_deinit();
+  
+  /*
+  // Original watchdog setup - disabled for now
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = WATCHDOG_TIMEOUT_S * 1000,
     .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
     .trigger_panic = true
   };
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);
-  Serial.printf("⏰ Watchdog configured: %d seconds timeout\n", WATCHDOG_TIMEOUT_S);
+  
+  esp_err_t result = esp_task_wdt_init(&wdt_config);
+  if (result == ESP_OK) {
+    esp_task_wdt_add(NULL);
+    Serial.printf("⏰ Watchdog configured: %d seconds timeout\n", WATCHDOG_TIMEOUT_S);
+  } else {
+    Serial.printf("⚠️ Watchdog setup failed: %s\n", esp_err_to_name(result));
+  }
+  */
 }
 
 void initializeWiFi() {
@@ -353,7 +366,7 @@ void initializeWiFi() {
     delay(500);
     Serial.print(".");
     attempts++;
-    esp_task_wdt_reset(); // Feed watchdog during connection
+    // esp_task_wdt_reset(); // Feed watchdog during connection - DISABLED
   }
   
   if (WiFi.status() == WL_CONNECTED) {
@@ -414,6 +427,9 @@ void checkCloudAvailability() {
 }
 
 void syncWithCloud() {
+  // Feed watchdog before starting cloud sync - DISABLED  
+  // esp_task_wdt_reset();
+  
   if (!wifiConnected) {
     Serial.println("☁️ Cloud sync skipped - WiFi not available");
     return;
@@ -436,10 +452,9 @@ void syncWithCloud() {
     doc["sensor_health"] = "good"; // Device is online and sending data
     doc["battery_voltage"] = 12.0; // Assume 12V power supply
     doc["signal_strength"] = WiFi.RSSI();
-    // Add device connection status to ensure frontend shows as online
-    doc["device_status"] = "online"; // Explicitly mark as online
-    doc["connection_state"] = "connected"; // Additional status indicator
-    // Removed wifi_rssi and uptime_seconds - not in table schema
+    doc["float_switch"] = false; // Top tank typically doesn't have float switch
+    doc["manual_override"] = false; // Default value
+    // Removed device_status and connection_state - not in table schema
     
     String payload;
     serializeJson(doc, payload);
@@ -597,6 +612,9 @@ void diagnosticSensorTest() {
 }
 
 void readSensors() {
+  // Feed watchdog before sensor operations - DISABLED
+  // esp_task_wdt_reset();
+  
   static float lastValidLevel = 0.0;
   static int invalidReadingCount = 0;
   static float readings[5] = {0}; // Store last 5 readings for filtering

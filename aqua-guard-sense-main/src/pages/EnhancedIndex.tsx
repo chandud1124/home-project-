@@ -662,6 +662,26 @@ const EnhancedIndex = () => {
     });
   };
 
+  // Helper function to determine connection status based on data freshness
+  const getConnectionStatus = (tankData: TankReading | null): {
+    connected: boolean;
+    connectionState: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stable' | 'stale';
+  } => {
+    if (!tankData) return { connected: false, connectionState: 'disconnected' };
+    
+    const dataAge = new Date().getTime() - new Date(tankData.timestamp).getTime();
+    const thirtySeconds = 30 * 1000;
+    const twoMinutes = 2 * 60 * 1000;
+    
+    if (dataAge < thirtySeconds) {
+      return { connected: true, connectionState: 'stable' };
+    } else if (dataAge < twoMinutes) {
+      return { connected: true, connectionState: 'connected' };
+    } else {
+      return { connected: false, connectionState: 'stale' };
+    }
+  };
+
   // Use real data with defaults when not available
   const topTankData = topTank || {
     level_percentage: 0,
@@ -890,11 +910,13 @@ const EnhancedIndex = () => {
                 status={topTankData.level_percentage > 80 ? "full" :
                         topTankData.level_percentage > 50 ? "normal" :
                         topTankData.level_percentage > 20 ? "low" : "critical"}
-                sensorHealth={systemStatusData.esp32_top_status === 'online' ? 'online' : 'offline'}
+                sensorHealth={topTank?.sensor_health === 'good' ? 'online' : 
+                             topTank?.sensor_health === 'warning' ? 'warning' : 'offline'}
                 esp32Status={{
-                  connected: isEsp32Connected,
-                  wifiStrength: topTank?.signal_strength || systemStatusData.wifi_strength || -50,
-                  lastSeen: esp32LastSeen || new Date()
+                  ...getConnectionStatus(topTank),
+                  wifiStrength: topTank?.signal_strength || 0,
+                  lastSeen: topTank?.timestamp ? new Date(topTank.timestamp) : new Date(),
+                  backendResponsive: true
                 }}
                 symbol="🏠"
                 floatSwitch={false}
@@ -920,11 +942,13 @@ const EnhancedIndex = () => {
                 status={sumpTankData.level_percentage > 80 ? "full" :
                         sumpTankData.level_percentage > 50 ? "normal" :
                         sumpTankData.level_percentage > 20 ? "low" : "critical"}
-                sensorHealth={systemStatusData.esp32_sump_status === 'online' ? 'online' : 'offline'}
+                sensorHealth={sumpTank?.sensor_health === 'good' ? 'online' : 
+                             sumpTank?.sensor_health === 'warning' ? 'warning' : 'offline'}
                 esp32Status={{
-                  connected: systemStatusData.esp32_sump_status === 'online',
-                  wifiStrength: 82,
-                  lastSeen: new Date()
+                  ...getConnectionStatus(sumpTank),
+                  wifiStrength: sumpTank?.signal_strength || 0,
+                  lastSeen: sumpTank?.timestamp ? new Date(sumpTank.timestamp) : new Date(),
+                  backendResponsive: true
                 }}
                 symbol="🕳️"
                 floatSwitch={sumpTankData.float_switch}
